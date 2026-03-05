@@ -23,10 +23,10 @@ def main():
         print(f"Prompt {i}:")
         print(output.outputs[0].text)
 
-    # 显式释放资源，避免多次运行时 EngineCore 崩溃
-    del llm
-    import gc
-    gc.collect()
+    # # 显式释放资源，避免多次运行时 EngineCore 崩溃
+    # del llm
+    # import gc
+    # gc.collect()
 
 if __name__ == "__main__":
     main()
