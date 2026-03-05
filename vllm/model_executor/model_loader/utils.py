@@ -31,6 +31,7 @@ from vllm.utils.torch_utils import get_accelerator_view_from_cpu_tensor
 logger = init_logger(__name__)
 
 
+# TODO(leon): 学习如何组建model的
 @instrument(span_name="Initialize model")
 def initialize_model(
     vllm_config: VllmConfig,

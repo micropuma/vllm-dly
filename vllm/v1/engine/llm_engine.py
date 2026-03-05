@@ -153,7 +153,8 @@ class LLMEngine:
             stat_loggers=stat_loggers,
             multiprocess_mode=envs.VLLM_ENABLE_V1_MULTIPROCESSING,
         )
-
+    
+    # 构造LLMEngine的工厂方法
     @classmethod
     def from_engine_args(
         cls,

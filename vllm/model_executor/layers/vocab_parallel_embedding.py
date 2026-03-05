@@ -181,6 +181,8 @@ def get_masked_input_and_mask(
     return input_, ~vocab_mask
 
 
+# TODO(leon): 这段代码在decode上性能比较好，因为size恒定为1，不会断开torch.compile的计算图生成  
+#             在prefill上，需要针对size做一定量的特判，导致torch.compile编译栈很深
 # --8<-- [start:vocab_parallel_embedding]
 @CustomOp.register("vocab_parallel_embedding")
 class VocabParallelEmbedding(CustomOp):

@@ -24,6 +24,8 @@
 # limitations under the License.
 """Inference-only LLaMA model compatible with HuggingFace weights."""
 
+# TODO(leon): 学习 llama 模型实现
+
 from collections.abc import Iterable
 from itertools import islice
 
@@ -398,6 +400,7 @@ class LlamaModel(nn.Module):
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
+    # TODO(leon): LlamaCasual调用LlamaModel的forward pass
     def forward(
         self,
         input_ids: torch.Tensor | None,
@@ -502,7 +505,7 @@ class LlamaModel(nn.Module):
             loaded_params.add(name)
         return loaded_params
 
-
+# TODO(leon): Llama模型的入口
 class LlamaForCausalLM(
     nn.Module, SupportsLoRA, SupportsPP, SupportsEagle, SupportsEagle3
 ):
@@ -579,6 +582,7 @@ class LlamaForCausalLM(
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_input_ids(input_ids)
 
+    # TODO(leon): 第一个forward pass
     def forward(
         self,
         input_ids: torch.Tensor | None,

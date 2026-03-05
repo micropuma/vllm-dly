@@ -632,6 +632,7 @@ class Worker(WorkerBase):
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
         return self.model_runner.sample_tokens(grammar_output)
 
+    # TODO(leon): GPU模型推理入口
     @torch.inference_mode()
     def execute_model(
         self, scheduler_output: "SchedulerOutput"

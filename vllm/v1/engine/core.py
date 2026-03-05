@@ -78,6 +78,7 @@ HANDSHAKE_TIMEOUT_MINS = 5
 _R = TypeVar("_R")  # Return type for collective_rpc
 
 
+# TODO(leon): 深入dump vLLM的核心engine实现
 class EngineCore:
     """Inner loop of vLLM's Engine."""
 

@@ -296,6 +296,7 @@ class cmake_build_ext(build_ext):
             cwd=self.build_temp,
         )
 
+    # 重写build_extensions方法，使用cmake构建所有的扩展模块
     def build_extensions(self) -> None:
         # Ensure that CMake is present and working
         try:
@@ -970,6 +971,7 @@ if _is_hip():
     ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
 
 if _is_cuda():
+    # 根据cuda版本选择是否编译FA2和FA3
     ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa2_C"))
     if envs.VLLM_USE_PRECOMPILED or (
         CUDA_HOME and get_nvcc_cuda_version() >= Version("12.3")

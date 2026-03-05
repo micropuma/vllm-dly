@@ -3065,6 +3065,7 @@ class GPUModelRunner(
         finally:
             self.prepare_inputs_event.record()
 
+    # TODO(leon): 重点三
     def _model_forward(
         self,
         input_ids: torch.Tensor | None = None,
@@ -3353,6 +3354,7 @@ class GPUModelRunner(
 
         return slot_mappings_by_gid, slot_mappings_by_layer
 
+    # TODO(leon): GPU模型推理入口 重点一
     @torch.inference_mode()
     def execute_model(
         self,
@@ -3585,6 +3587,8 @@ class GPUModelRunner(
                 scheduler_output, clear_metadata=clear_kv_metadata
             ) as kv_connector_output,
         ):
+            # TODO(leon): llama模型layer by layer decode 入口  
+            # 目前问题：录制成一个cuda graph了，无法torch profiler分析
             model_output = self._model_forward(
                 input_ids=input_ids,
                 positions=positions,
@@ -3667,6 +3671,7 @@ class GPUModelRunner(
         self.kv_connector_output = kv_connector_output
         return None
 
+    # TODO(leon): GPU模型推理入口 重点二
     @torch.inference_mode
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"

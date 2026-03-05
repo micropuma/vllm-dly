@@ -771,6 +771,8 @@ class WorkerProc:
             ready_writer.close()
             ready_writer = None
 
+            # TODO(leon): 至此，WorkerPrco已经完全准备好
+            # vLLM engine只需不断等待serving model即可。
             worker.worker_busy_loop(cancel=shutdown_event)
 
         except Exception:
@@ -855,6 +857,7 @@ class WorkerProc:
                 elif isinstance(method, bytes):
                     func = partial(cloudpickle.loads(method), self.worker)
 
+                # TODO(leon): 模型serving的入口函数
                 output = func(*args, **kwargs)
             except Exception as e:
                 # Notes have been introduced in python 3.11

@@ -353,6 +353,7 @@ class WorkerWrapperBase:
                 req_data.mm_features
             )
 
+    # TODO(leon): execute_model里借助于这个worker封装，分派到不同backend的worker中实现核心推理逻辑
     def execute_model(
         self, scheduler_output: SchedulerOutput
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
