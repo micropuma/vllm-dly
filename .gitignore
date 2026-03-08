@@ -244,3 +244,8 @@ csrc/cpu/cpu_attn_dispatch_generated.h
 
 # torch profile & nsys profile files  
 vllm_profile*/
+# torch_compile trace logs
+tl_out
+
+# 模型下载仓库  
+models/
