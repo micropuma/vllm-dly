@@ -594,6 +594,7 @@ class LayerFn(Protocol):
     def __call__(self, prefix: str) -> torch.nn.Module: ...
 
 
+# PP并行需要严格卡住时间步
 class PPMissingLayer(torch.nn.Identity):
     """
     A placeholder layer for missing layers in a pipeline parallel model.
@@ -627,13 +628,14 @@ def make_layers(
     from vllm.distributed.utils import get_pp_indices
     from vllm.model_executor.offloader import get_offloader
 
+    # 此构造方法考虑pp并行，只构造需要的层，其他层用PPMissingLayer占位
     start_layer, end_layer = get_pp_indices(
         num_hidden_layers, get_pp_group().rank_in_group, get_pp_group().world_size
     )
 
     modules = torch.nn.ModuleList(
         [PPMissingLayer() for _ in range(start_layer)]
-        + get_offloader().wrap_modules(
+        + get_offloader().wrap_modules(                     # TODO(leon): 可插拔的offloading机制
             layer_fn(prefix=f"{prefix}.{idx}") for idx in range(start_layer, end_layer)
         )
         + [PPMissingLayer() for _ in range(end_layer, num_hidden_layers)]

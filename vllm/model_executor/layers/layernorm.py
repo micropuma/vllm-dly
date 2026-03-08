@@ -127,7 +127,7 @@ def dispatch_rocm_rmsnorm_func(
 
 # --8<-- [start:rms_norm]
 @CustomOp.register("rms_norm")
-class RMSNorm(CustomOp):
+class RMSNorm(CustomOp):                                  # 重要的一个算子，面向不同硬件有多种实现
     """Root mean square normalization.
 
     Computes x -> w * x / sqrt(E[x^2] + eps) where w is the learned weight.
@@ -157,7 +157,7 @@ class RMSNorm(CustomOp):
         if self.has_weight:
             self.weight = nn.Parameter(self.weight)
 
-        if current_platform.is_rocm():
+        if current_platform.is_rocm():     # AMD 自定义加速路线
             aiter_rmsnorm_enabled = rocm_aiter_ops.is_rmsnorm_enabled()
             self.rocm_norm_func = dispatch_rocm_rmsnorm_func(
                 with_fused_add=False,

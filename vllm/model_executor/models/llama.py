@@ -162,7 +162,7 @@ class LlamaAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.max_position_embeddings = max_position_embeddings
 
-        self.qkv_proj = QKVParallelLinear(
+        self.qkv_proj = QKVParallelLinear(    # TODO(leon): 深入dump TP的qkv porjection实现细节
             hidden_size=hidden_size,
             head_size=self.head_dim,
             total_num_heads=self.total_num_heads,
@@ -180,10 +180,10 @@ class LlamaAttention(nn.Module):
             prefix=f"{prefix}.o_proj",
         )
 
-        self._init_rotary_emb(config, quant_config=quant_config)
+        self._init_rotary_emb(config, quant_config=quant_config)     # 旋转位置编码
 
         sliding_window = None
-        if layer_types := getattr(config, "layer_types", None):
+        if layer_types := getattr(config, "layer_types", None):      # 投机编码
             # Fix for Eagle3 compatibility:
             # for draft models, subtract target layer count
             # to get draft-relative layer index starting from 0
@@ -286,7 +286,7 @@ class LlamaDecoderLayer(nn.Module):
         else:
             attn_type = AttentionType.ENCODER_ONLY
 
-        self.self_attn = attn_layer_type(
+        self.self_attn = attn_layer_type(      # 用户可以动态配置llama的attention 
             config=config,
             hidden_size=self.hidden_size,
             num_heads=config.num_attention_heads,
@@ -381,12 +381,12 @@ class LlamaModel(nn.Module):
             )
         else:
             self.embed_tokens = PPMissingLayer()
-        self.start_layer, self.end_layer, self.layers = make_layers(
+        self.start_layer, self.end_layer, self.layers = make_layers(       # 根据vllm_config和layer_type创建层
             config.num_hidden_layers,
             lambda prefix: layer_type(vllm_config=vllm_config, prefix=prefix),
             prefix=f"{prefix}.layers",
         )
-        if get_pp_group().is_last_rank:
+        if get_pp_group().is_last_rank:      # TP并行下，当前rank即是第一个rank也是最后一个rank
             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
             self.norm = PPMissingLayer()
@@ -409,6 +409,7 @@ class LlamaModel(nn.Module):
         inputs_embeds: torch.Tensor | None = None,
         **extra_layer_kwargs,
     ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
+        # 在流水线并行中，只有第一个rank需要做词嵌入
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
@@ -509,6 +510,7 @@ class LlamaModel(nn.Module):
 class LlamaForCausalLM(
     nn.Module, SupportsLoRA, SupportsPP, SupportsEagle, SupportsEagle3
 ):
+    # 提高加载效率
     packed_modules_mapping = {
         "qkv_proj": ["q_proj", "k_proj", "v_proj"],
         "gate_up_proj": ["gate_proj", "up_proj"],
@@ -532,7 +534,7 @@ class LlamaForCausalLM(
         quant_config = vllm_config.quant_config
         self.config = config
 
-        self.model = self._init_model(
+        self.model = self._init_model(        # 根据vllm_config和layer_type初始化LlamaModel
             vllm_config=vllm_config,
             prefix=maybe_prefix(prefix, "model"),
             layer_type=layer_type,

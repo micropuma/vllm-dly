@@ -94,7 +94,7 @@ class FatreluAndMul(CustomOp):
         super().__init__()
         self.threshold = threshold
         if current_platform.is_cuda_alike():
-            self.op = torch.ops._C.fatrelu_and_mul
+            self.op = torch.ops._C.fatrelu_and_mul   # 深入参考 csrc/activation_kernels.cu 的具体实现
         elif current_platform.is_cpu():
             self._forward_method = self.forward_native
 

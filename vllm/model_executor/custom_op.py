@@ -125,8 +125,8 @@ class CustomOp(nn.Module):
         self._enforce_enable = enforce_enable
         self._forward_method = self.dispatch_forward(compile_native=compile_native)
 
-    def forward(self, *args, **kwargs):
-        return self._forward_method(*args, **kwargs)
+    def forward(self, *args, **kwargs):          # 运行时动态分发机制
+        return self._forward_method(*args, **kwargs)     
 
     def forward_native(self, *args, **kwargs):
         """PyTorch-native implementation of the forward method.
