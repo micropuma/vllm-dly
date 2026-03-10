@@ -13,3 +13,5 @@ unset CUDA_LAUNCH_BLOCKING
 unset NCCL_DEBUG
 unset VLLM_TRACE_FUNCTION  
 
+VLLM_LOGGING_LEVEL=DEBUG python generate.py --model meta-llama/Meta-Llama-3-8B --tensor-parallel-size 2 --max-tokens 1024 --temperature 0.8 2>&1 | tee llama3-8B-debug.log
+

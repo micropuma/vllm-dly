@@ -1,0 +1,1 @@
+nsys profile -o report.nsys-rep --trace-fork-before-exec=true --cuda-graph-trace=node python qwen3-0.6B.py
