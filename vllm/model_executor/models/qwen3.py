@@ -52,6 +52,7 @@ from .interfaces import SupportsEagle3, SupportsLoRA, SupportsPP
 from .qwen2 import Qwen2MLP as Qwen3MLP
 from .qwen2 import Qwen2Model
 from .utils import AutoWeightsLoader, PPMissingLayer, extract_layer_index, maybe_prefix
+from vllm.utils.nvtx_pytorch_hooks import PytHooks                  # 导入nvtx hood 
 
 logger = init_logger(__name__)
 
@@ -220,19 +221,23 @@ class Qwen3DecoderLayer(nn.Module):
         residual: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
-        hidden_states = self.self_attn(
-            positions=positions,
-            hidden_states=hidden_states,
-        )
+        with torch.profiler.record_function("Qwen3RMSNorm"):
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        with torch.profiler.record_function("Qwen3Attention"):
+            hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+            )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+        with torch.profiler.record_function("Qwen3RMSNorm"):
+            hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        with torch.profiler.record_function("Qwen3MLP"):
+            hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
 
@@ -256,6 +261,10 @@ class Qwen3Model(Qwen2Model):
         super().__init__(
             vllm_config=vllm_config, prefix=prefix, decoder_layer_type=Qwen3DecoderLayer
         )
+
+        # 末尾注册nvtx hooks，确保所有子模块都被hook到
+        self._nvtx_hooks = PytHooks()
+        self._nvtx_hooks.register_hooks(self, module_prefix="LlamaModel")
 
 
 class Qwen3ForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3):

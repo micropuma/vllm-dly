@@ -37,6 +37,7 @@ from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
 from vllm.distributed import get_pp_group, get_tensor_model_parallel_world_size
 from vllm.model_executor.layers.activation import SiluAndMul
+from vllm.utils.nvtx_pytorch_hooks import PytHooks                  # 导入nvtx hood 
 from vllm.model_executor.layers.attention import (
     Attention,
     EncoderOnlyAttention,
@@ -397,6 +398,10 @@ class LlamaModel(nn.Module):
             ["hidden_states", "residual"], config.hidden_size
         )
 
+        # 末尾注册nvtx hooks，确保所有子模块都被hook到
+        self._nvtx_hooks = PytHooks()
+        self._nvtx_hooks.register_hooks(self, module_prefix="LlamaModel")
+
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
@@ -593,7 +598,7 @@ class LlamaForCausalLM(
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
         model_output = self.model(
-            input_ids, positions, intermediate_tensors, inputs_embeds
+            input_ids, positions, intermediate_tensors, inputs_embeds    # intermediate_tensors在流水线并行中用于传递hidden_states和residual
         )
         return model_output
 
