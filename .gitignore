@@ -246,6 +246,7 @@ csrc/cpu/cpu_attn_dispatch_generated.h
 vllm_profile*/
 # torch_compile trace logs
 tl_out
+*.nsys-rep
 
 # 模型下载仓库  
 models/
