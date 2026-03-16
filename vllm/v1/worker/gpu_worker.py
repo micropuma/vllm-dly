@@ -342,7 +342,7 @@ class Worker(WorkerBase):
             You may limit the usage of GPU memory
             by adjusting the `gpu_memory_utilization` parameter.
         """
-        if kv_cache_memory_bytes := self.cache_config.kv_cache_memory_bytes:
+        if kv_cache_memory_bytes := self.cache_config.kv_cache_memory_bytes:     # 用户指定了kv_cache_memory_bytes，直接使用，无需profile
             # still need a profile run which compiles the model for
             # max_num_batched_tokens
             self.model_runner.profile_run()
@@ -365,8 +365,8 @@ class Worker(WorkerBase):
         # Execute a forward pass with dummy inputs to profile the memory usage
         # of the model.
         with memory_profiling(
-            self.init_snapshot,
-            weights_memory=int(self.model_runner.model_memory_usage),
+            self.init_snapshot,                                            # 初始空闲内存
+            weights_memory=int(self.model_runner.model_memory_usage),      # 用户可以自行设定weight memory
         ) as profile_result:
             self.model_runner.profile_run()
 
@@ -376,7 +376,7 @@ class Worker(WorkerBase):
         free_gpu_memory = profile_result.after_profile.free_memory
         # NOTE(woosuk): Here we assume that the other processes using the same
         # GPU did not change their memory usage during the profiling.
-        assert self.init_snapshot.free_memory >= free_gpu_memory, (
+        assert self.init_snapshot.free_memory >= free_gpu_memory, (              # profile结束后的空闲内存不应该比初始空闲内存更大，否则说明其他进程在profile期间释放了GPU内存，导致profile结果不准确
             "Error in memory profiling. "
             f"Initial free memory {format_gib(self.init_snapshot.free_memory)} GiB, "
             f"current free memory {format_gib(free_gpu_memory)} GiB. "
@@ -385,7 +385,7 @@ class Worker(WorkerBase):
             "To fix this, ensure consistent GPU memory allocation or "
             "isolate vLLM in its own container."
         )
-        self.available_kv_cache_memory_bytes = (
+        self.available_kv_cache_memory_bytes = (                                 # 用户配置的gpu utilization * 初始空闲内存 - profile期间非kv cache相关的内存增长（模型权重、激活、非torch内存等）
             self.requested_memory - profile_result.non_kv_cache_memory
         )
 
@@ -462,7 +462,7 @@ class Worker(WorkerBase):
             self.model_runner.initialize_kv_cache(kv_cache_config)
 
     @instrument(span_name="Warmup (GPU)")
-    def compile_or_warm_up_model(self) -> None:
+    def compile_or_warm_up_model(self) -> None:                     # 模型warmup阶段，区别于前面的profile阶段（profile为了确定kv cache大小）
         warmup_sizes = []
 
         if self.vllm_config.compilation_config.mode == CompilationMode.VLLM_COMPILE:
@@ -626,13 +626,14 @@ class Worker(WorkerBase):
         )
         return self.profiler.annotate_context_manager(annotation)
 
+    # GPU模型采样入口
     @torch.inference_mode()
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
         return self.model_runner.sample_tokens(grammar_output)
 
-    # TODO(leon): GPU模型推理入口
+    # GPU模型推理入口
     @torch.inference_mode()
     def execute_model(
         self, scheduler_output: "SchedulerOutput"

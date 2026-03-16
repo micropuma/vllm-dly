@@ -263,8 +263,9 @@ class Qwen3Model(Qwen2Model):
         )
 
         # 末尾注册nvtx hooks，确保所有子模块都被hook到
-        self._nvtx_hooks = PytHooks()
-        self._nvtx_hooks.register_hooks(self, module_prefix="LlamaModel")
+        # TODO(leon)：这个hook在非eager模式下，会造成embedding层图编译失败，暂时注释掉。后续需要调查原因并修复。
+        # self._nvtx_hooks = PytHooks()
+        # self._nvtx_hooks.register_hooks(self, module_prefix="QwenModel")
 
 
 class Qwen3ForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3):

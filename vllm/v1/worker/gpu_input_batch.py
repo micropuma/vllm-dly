@@ -933,6 +933,9 @@ class InputBatch:
             self.sampled_token_ids_cpu = None
             self.async_copy_ready_event = None
 
+    # 延迟填充，GPU算下一个logits了，CPU先占好位，等GPU算完了把真正的token_id填上
+    # 这样GPU到CPU的传输延迟可以通过异步化来隐藏掉
+    # 这个函数是异步填充GPU传来的数据
     def update_async_output_token_ids(self) -> None:
         """
         In async scheduling case, update output_token_ids in sampling metadata

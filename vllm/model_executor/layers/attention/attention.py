@@ -411,7 +411,7 @@ class Attention(nn.Module, AttentionLayerBase):
             if self.impl.supports_quant_query_input:
                 query, _ = self.query_quant(query, self._q_scale)
 
-        if self.use_output:
+        if self.use_output:                # 拆解多头注意力
             if output_shape is None:
                 # Handle both 2D [num_tokens, hidden] and
                 # 3D [num_tokens, heads, head_dim] query
@@ -451,7 +451,7 @@ class Attention(nn.Module, AttentionLayerBase):
                     kv_cache_dummy_dep=kv_cache_dummy_dep,
                 )
             else:
-                # Skip this if sharing KV cache with an earlier attention layer.
+                # Skip this if sharing KV cache with an earlier attention layer.   # dump kv cache机制
                 if (
                     not self.attn_backend.forward_includes_kv_cache_update
                     and self.kv_sharing_target_layer_name is None

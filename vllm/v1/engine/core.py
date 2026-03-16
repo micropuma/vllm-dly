@@ -78,7 +78,7 @@ HANDSHAKE_TIMEOUT_MINS = 5
 _R = TypeVar("_R")  # Return type for collective_rpc
 
 
-# TODO(leon): 深入dump vLLM的核心engine实现
+# 深入dump vLLM的核心engine实现
 class EngineCore:
     """Inner loop of vLLM's Engine."""
 
@@ -225,7 +225,7 @@ class EngineCore:
         enable_envs_cache()
 
     @instrument(span_name="Prepare model")
-    def _initialize_kv_caches(
+    def _initialize_kv_caches(          # TODO(leon)：深入dump EngineCore的_kv_cache初始化逻辑
         self, vllm_config: VllmConfig
     ) -> tuple[int, int, KVCacheConfig]:
         start = time.time()
@@ -386,6 +386,8 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         scheduler_output = self.scheduler.schedule()
+
+        # 模型执行，异步调度和执行的区别在于是否在这里等待模型执行完成，如果是异步调度，则在step_with_batch_queue中等待模型执行完成
         future = self.model_executor.execute_model(scheduler_output, non_block=True)
         grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
         with (
@@ -415,7 +417,7 @@ class EngineCore:
             if draft_token_ids is not None:
                 self.scheduler.update_draft_token_ids(draft_token_ids)
 
-    def step_with_batch_queue(
+    def step_with_batch_queue(                          # TODO(leon):理解EngineCore的step_with_batch_queue方法，主要是理解异步调度和执行的流程
         self,
     ) -> tuple[dict[int, EngineCoreOutputs] | None, bool]:
         """Schedule and execute batches with the batch queue.

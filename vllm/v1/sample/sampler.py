@@ -17,6 +17,7 @@ from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
 _SAMPLING_EPS = 1e-5
 
 
+# TODO(leon)：进一步dump这个文件
 class Sampler(nn.Module):
     """
     A layer that samples the next tokens from the model's outputs
@@ -77,7 +78,7 @@ class Sampler(nn.Module):
         # This is different from the V0 sampler, which uses the logits that
         # is used for sampling (after penalties and temperature scaling).
         num_logprobs = sampling_metadata.max_num_logprobs
-        if num_logprobs is not None:
+        if num_logprobs is not None:              # 快找一下没有经过白名单等预处理的原始logits/logits probs
             if logprobs_mode == "raw_logprobs":
                 raw_logprobs = self.compute_logprobs(logits)
             elif logprobs_mode == "raw_logits":
@@ -138,7 +139,7 @@ class Sampler(nn.Module):
         # Avoid division by zero if there are greedy requests.
         if not all_random:
             temp = torch.where(temp < _SAMPLING_EPS, 1.0, temp)
-        return logits.div_(temp.unsqueeze(dim=1))
+        return logits.div_(temp.unsqueeze(dim=1))         # temp维度是[batch_size]，需要unsqueeze成[batch_size, 1]以便广播
 
     @staticmethod
     def greedy_sample(logits: torch.Tensor) -> torch.Tensor:
@@ -263,7 +264,7 @@ class Sampler(nn.Module):
             for out, spec in zip(output_token_ids, spec_token_ids)
         ]
 
-    def apply_logits_processors(
+    def apply_logits_processors(          # 白名单 + logits bias + 惩罚预处理
         self,
         logits: torch.Tensor,
         sampling_metadata: SamplingMetadata,

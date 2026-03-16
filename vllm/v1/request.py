@@ -56,6 +56,7 @@ class StreamingUpdate:
         )
 
 
+# 请求类，包含请求的所有信息和状态
 class Request:
     def __init__(
         self,

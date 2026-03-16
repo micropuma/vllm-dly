@@ -399,8 +399,9 @@ class LlamaModel(nn.Module):
         )
 
         # 末尾注册nvtx hooks，确保所有子模块都被hook到
-        self._nvtx_hooks = PytHooks()
-        self._nvtx_hooks.register_hooks(self, module_prefix="LlamaModel")
+        # TODO(leon)：这个hook在非eager模式下，会造成embedding层图编译失败，暂时注释掉。后续需要调查原因并修复。
+        # self._nvtx_hooks = PytHooks()
+        # self._nvtx_hooks.register_hooks(self, module_prefix="LlamaModel")
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)

@@ -66,7 +66,7 @@ _PERCENTILE_TO_STD_TABLE = [
 ]
 # fmt: on
 
-
+# TODO(leon)：读核心topp and topk实现逻辑
 @triton.jit
 def _topk_topp_kernel(
     LOGITS,

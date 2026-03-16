@@ -356,6 +356,8 @@ class AsyncGPUPoolingModelRunnerOutput(AsyncModelRunnerOutput):
         return self._model_runner_output
 
 
+# 投机采样/异步流水线下，execute_model算完的结果不是理解传给sample phase的
+# 需要一个中间状态来传递必要的信息（比如logits，hidden states等）给sample_tokens
 class ExecuteModelState(NamedTuple):
     """Ephemeral cached state transferred between execute_model() and
     sample_tokens(), after execute_model() returns None."""
@@ -2915,7 +2917,7 @@ class GPUModelRunner(
             draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
             self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
 
-        sampler_output = self.rejection_sampler(
+        sampler_output = self.rejection_sampler(      # TODO(leon)：投机采样核心，原始模型拒绝draft model输出
             spec_decode_metadata,
             None,  # draft_probs
             logits,
@@ -3065,7 +3067,7 @@ class GPUModelRunner(
         finally:
             self.prepare_inputs_event.record()
 
-    # TODO(leon): 重点三
+    # 重点三
     def _model_forward(
         self,
         input_ids: torch.Tensor | None = None,
@@ -3354,7 +3356,7 @@ class GPUModelRunner(
 
         return slot_mappings_by_gid, slot_mappings_by_layer
 
-    # TODO(leon): GPU模型推理入口 重点一
+    # GPU模型推理入口 重点一
     @torch.inference_mode()
     def execute_model(
         self,
@@ -3587,7 +3589,7 @@ class GPUModelRunner(
                 scheduler_output, clear_metadata=clear_kv_metadata
             ) as kv_connector_output,
         ):
-            # TODO(leon): llama模型layer by layer decode 入口  
+            # llama模型layer by layer decode 入口  
             # 目前问题：录制成一个cuda graph了，无法torch profiler分析
             model_output = self._model_forward(
                 input_ids=input_ids,
@@ -3671,7 +3673,8 @@ class GPUModelRunner(
         self.kv_connector_output = kv_connector_output
         return None
 
-    # TODO(leon): GPU模型推理入口 重点二
+    # GPU模型推理入口 重点二 Sample是性能瓶颈，包含大量稀碎算子和topk-topp这样的并行复杂的算子  
+    # FlashInfer / Triton 算子支持是重点
     @torch.inference_mode
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
@@ -3679,6 +3682,7 @@ class GPUModelRunner(
         kv_connector_output = self.kv_connector_output
         self.kv_connector_output = None
 
+        # ===================================== 准备与状态注入 =====================================
         if self.execute_model_state is None:
             # receive sampled token ids from the last PP rank.
             if self.use_async_scheduling and get_pp_group().world_size > 1:
@@ -3717,6 +3721,7 @@ class GPUModelRunner(
                 scheduler_output, grammar_output, self.input_batch, logits
             )
 
+        # ===================================== 核心采样 =====================================
         with record_function_or_nullcontext("gpu_model_runner: sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
 
@@ -3793,6 +3798,7 @@ class GPUModelRunner(
             else:
                 propose_drafts_after_bookkeeping = input_fits_in_drafter
 
+        # ===================================== 状态同步 =====================================
         with record_function_or_nullcontext("gpu_model_runner: bookkeep"):
             (
                 num_nans_in_logits,
@@ -3825,6 +3831,7 @@ class GPUModelRunner(
         with record_function_or_nullcontext("gpu_model_runner: eplb"):
             self.eplb_step()
 
+        # ===================================== 数据打包与异步发射 =====================================
         with record_function_or_nullcontext("gpu_model_runner: ModelRunnerOutput"):
             if self.model_config.enable_return_routed_experts:
                 capturer = RoutedExpertsCapturer.get_instance()
@@ -4670,7 +4677,7 @@ class GPUModelRunner(
         )
 
     @torch.inference_mode()
-    def _dummy_run(
+    def _dummy_run(                 # profile阶段create_mixed_batch 和 uniform_decode参数均为false，表示是均匀的prefill阶段，即最占内存的情况
         self,
         num_tokens: int,
         cudagraph_runtime_mode: CUDAGraphMode | None = None,
@@ -4771,7 +4778,7 @@ class GPUModelRunner(
         num_sampled_tokens = np.ones(num_reqs, dtype=np.int32)
 
         _cudagraph_mode, batch_desc, should_ubatch, num_tokens_across_dp, _ = (
-            self._determine_batch_execution_and_padding(
+            self._determine_batch_execution_and_padding(                  # TODO(leon)：理解如何创建具有代表性的批次
                 num_tokens=num_tokens_unpadded,
                 num_reqs=num_reqs,
                 num_scheduled_tokens_np=num_scheduled_tokens,
@@ -5031,7 +5038,7 @@ class GPUModelRunner(
 
         dummy_tensors = lambda v: torch.full((num_reqs,), v, device=self.device)
 
-        dummy_metadata = SamplingMetadata(
+        dummy_metadata = SamplingMetadata(     # 采用topp策略，关掉topk策略
             temperature=dummy_tensors(0.5),
             all_greedy=False,
             all_random=False,
@@ -5175,7 +5182,7 @@ class GPUModelRunner(
         max_task = max(output_size.items(), key=lambda x: x[1])[0]
         return self._dummy_pooler_run_task(hidden_states, max_task)
 
-    def profile_run(self) -> None:
+    def profile_run(self) -> None:                               # 初始化kv cache时，预热模型来分析可用kv存储空间
         # Profile with multimodal encoder & encoder cache.
         if self.supports_mm_inputs:
             mm_config = self.model_config.multimodal_config

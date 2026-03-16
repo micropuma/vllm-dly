@@ -17,6 +17,7 @@ class SchedulingPolicy(Enum):
     PRIORITY = "priority"
 
 
+# ABC是python的abstract base class，定义了一个抽象类RequestQueue，包含了一系列抽象方法，这些方法需要在子类中实现。
 class RequestQueue(ABC):
     """Abstract base class for request queues."""
 

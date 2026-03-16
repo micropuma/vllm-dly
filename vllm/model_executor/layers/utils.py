@@ -52,6 +52,11 @@ def shuffle_weight(w: torch.Tensor) -> torch.Tensor:
     return w_shuffled
 
 
+# 计算token出现的次数，并生成mask
+# 逻辑如下：  
+# token维度是：[num_seqs, seq_len]
+# bin_counts维度是：[num_seqs, vocab_size]，表示每个token在每个序列中出现的次数
+# mask维度是：[num_seqs, vocab_size]，表示每个token在每个序列中是否出现过（出现过为True，没出现过为False）
 def get_token_bin_counts_and_mask(
     tokens: torch.Tensor,
     vocab_size: int,
@@ -62,14 +67,22 @@ def get_token_bin_counts_and_mask(
     bin_counts = torch.zeros(
         (num_seqs, vocab_size + 1), dtype=torch.long, device=tokens.device
     )
-    bin_counts.scatter_add_(1, tokens, torch.ones_like(tokens))
+
+    # 列维度做原子加操作
+    # tokens是index，torch.ones_like(tokens)是src，bin_counts是self
+    # 原理如下：
+    # # self[index[i][j][k]][j][k] += src[i][j][k]  # if dim == 0
+    # # self[i][index[i][j][k]][k] += src[i][j][k]  # if dim == 1
+    # # self[i][j][index[i][j][k]] += src[i][j][k]  # if dim == 2
+    bin_counts.scatter_add_(1, tokens, torch.ones_like(tokens))   
     bin_counts = bin_counts[:, :vocab_size]
     mask = bin_counts > 0
 
     return bin_counts, mask
 
 
-def apply_penalties(
+# 底层调用csrc/sampler.cu中的 apply_repetition_penalties_kernel 函数
+def apply_penalties(                
     logits: torch.Tensor,
     prompt_tokens_tensor: torch.Tensor,
     output_tokens_tensor: torch.Tensor,
@@ -91,9 +104,12 @@ def apply_penalties(
     repetition_penalties: The repetition penalties of shape (num_seqs, )
     """
     num_seqs, vocab_size = logits.shape
+
+    # 统计单词在promt中出现的次数
     _, prompt_mask = get_token_bin_counts_and_mask(
         prompt_tokens_tensor, vocab_size, num_seqs
     )
+    # 统计输出单词在已经生成的输出中出现的次数
     output_bin_counts, output_mask = get_token_bin_counts_and_mask(
         output_tokens_tensor, vocab_size, num_seqs
     )

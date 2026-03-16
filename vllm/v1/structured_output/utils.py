@@ -41,6 +41,7 @@ logger = init_logger(__name__)
 CACHE = None
 
 
+# TODO(leon): 后续研究结构化输出如何实现的
 def apply_grammar_bitmask(
     scheduler_output: SchedulerOutput,
     grammar_output: GrammarOutput,

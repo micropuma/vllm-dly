@@ -281,7 +281,7 @@ direct_register_custom_op(
 )
 
 
-# TODO(leon): gpu管理数据结构
+# gpu管理数据结构
 class GroupCoordinator:
     """
     PyTorch ProcessGroup wrapper for a group of processes.
@@ -1158,7 +1158,7 @@ def init_model_parallel_group(
     )
 
 
-# TODO(leon): TP数据结构通信
+# TP数据结构通信
 _TP: GroupCoordinator | None = None
 
 

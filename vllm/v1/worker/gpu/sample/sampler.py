@@ -18,6 +18,7 @@ from vllm.v1.worker.gpu.sample.states import NO_LOGPROBS, SamplingStates
 from vllm.v1.worker.gpu.states import RequestState
 
 
+# TODO(leon)：sampling一直是性能的瓶颈
 class Sampler:
     def __init__(
         self,
@@ -98,6 +99,7 @@ class Sampler:
         )
         return sampler_output
 
+    # TODO(leon)：sampler的实现细节
     def sample(
         self,
         logits: torch.Tensor,

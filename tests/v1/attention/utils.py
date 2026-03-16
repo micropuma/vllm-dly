@@ -155,6 +155,7 @@ def create_standard_kv_cache_spec(vllm_config: VllmConfig) -> FullAttentionSpec:
     )
 
 
+# vllm的默认参数配置
 def create_vllm_config(
     model_name: str = "meta-llama/Meta-Llama-3-8B",
     tensor_parallel_size: int = 1,
