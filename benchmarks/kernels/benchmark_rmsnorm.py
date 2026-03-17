@@ -10,6 +10,83 @@ from torch import nn
 from vllm import _custom_ops as vllm_ops
 from vllm.triton_utils import triton
 
+"""
+This benchmark evaluates the performance of RMSNorm implementations across different providers:
+- HuggingFace: A naive PyTorch implementation of RMSNorm.
+- FlashInfer: The implementation of RMSNorm in the FlashInfer library.
+- vLLM: The implementation of RMSNorm in the vLLM library.
+- Torch Compile: A PyTorch implementation of RMSNorm that is compiled with torch.compile.
+
+usage example:
+- python benchmarks/kernels/benchmark_rmsnorm.py
+"""
+
+def _rmsnorm_naive(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    orig_dtype = x.dtype
+    orig_shape = x.shape
+
+    x = x.to(torch.float32)
+    x.view(-1, x.shape[-1])
+
+    variance = x.pow(2).mean(dim=-1, keepdim=True)
+    x = x * torch.rsqrt(variance + eps)
+    x = x.to(orig_dtype) * weight
+
+    return x.view(orig_shape)
+
+    
+def _fused_add_rmsnorm(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    residual: torch.Tensor,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    orig_dtype = x.dtype
+    orig_x_shape = x.shape
+    orig_res_shape = residual.shape
+
+    x = x.to(torch.float32)
+    x.view(-1, x.shape[-1])
+    residual = residual.to(torch.float32)
+
+    x += residual.view(-1, residual.shape[-1])
+    residual = x.to(orig_dtype)
+    variance = x.pow(2).mean(dim=-1, keepdim=True)
+    x = x * torch.rsqrt(variance + eps)
+    x = x.to(orig_dtype) * weight
+
+    return x.view(orig_x_shape), residual.view(orig_res_shape)
+
+torch._dynamo.config.recompile_limit = 8888
+
+# TODO(leon): benchmark torch.compile with hard-coded shape versus dynamic shape  
+# currently have to set dyanmic to be True to avoid recompilation for different shapes, 
+# but this may lead to suboptimal performance. 
+_RMSNorm_Torch_Compile = torch.compile(
+    _rmsnorm_naive,
+    fullgraph=True,
+    dynamic=False,
+)
+_FusedAddRMSNorm_Torch_Compile = torch.compile(
+    _fused_add_rmsnorm,
+    fullgraph=True,
+    dynamic=False,
+)
+
+def rmsnorm_torch_compile(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    residual: torch.Tensor | None = None,
+    eps: float = 1e-6,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    if residual is None:  
+        return _RMSNorm_Torch_Compile(x, weight, eps)
+    else:
+        return _FusedAddRMSNorm_Torch_Compile(x, weight, residual, eps)
 
 class HuggingFaceRMSNorm(nn.Module):
     def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
@@ -126,19 +203,25 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
     output_vllm = rmsnorm_vllm(
         x.clone(), weight, residual.clone() if residual is not None else None
     )
+    output_torch_compile = rmsnorm_torch_compile(
+        x.clone(), weight, residual.clone() if residual is not None else None   
+    )
 
     if use_residual:
         output_naive = output_naive[0]
         output_flashinfer = output_flashinfer[0]
         output_vllm = output_vllm[0]
+        output_torch_compile = output_torch_compile[0]
 
     print(f"Naive output={output_naive}")
     print(f"FlashInfer output={output_flashinfer}")
     print(f"vLLM output={output_vllm}")
+    print(f"Torch Compile output={output_torch_compile}")
 
     if torch.allclose(
         output_naive, output_flashinfer, atol=1e-2, rtol=1e-2
-    ) and torch.allclose(output_naive, output_vllm, atol=1e-2, rtol=1e-2):
+    ) and torch.allclose(output_naive, output_vllm, atol=1e-2, rtol=1e-2
+    ) and torch.allclose(output_torch_compile, output_vllm, atol=1e-2, rtol=1e-2):
         print("✅ All implementations match")
     else:
         print("❌ Implementations differ")
@@ -156,9 +239,9 @@ def get_benchmark(use_residual):
             x_names=["head_num", "batch_size", "seq_len"],
             x_vals=[list(_) for _ in configs],
             line_arg="provider",
-            line_vals=["huggingface", "flashinfer", "vllm"],
-            line_names=["HuggingFace", "FlashInfer", "vLLM"],
-            styles=[("blue", "-"), ("green", "-"), ("red", "-")],
+            line_vals=["huggingface", "flashinfer", "vllm", "torch_compile"],
+            line_names=["HuggingFace", "FlashInfer", "vLLM", "Torch Compile"],
+            styles=[("blue", "-"), ("green", "-"), ("red", "-"), ("orange", "-")],
             ylabel="us",
             plot_name=f"rmsnorm-perf-{'with' if use_residual else 'without'}-residual",
             args={},
@@ -186,6 +269,15 @@ def get_benchmark(use_residual):
         elif provider == "flashinfer":
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: rmsnorm_flashinfer(
+                    x.clone(),
+                    weight,
+                    residual.clone() if residual is not None else None,
+                ),
+                quantiles=quantiles,
+            )
+        elif provider == "torch_compile":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: rmsnorm_torch_compile(
                     x.clone(),
                     weight,
                     residual.clone() if residual is not None else None,
