@@ -591,6 +591,51 @@ def get_benchmark(use_residual):
     return benchmark
 
 
+KERNEL_REGISTRY = {
+    "triton": rmsnorm_triton,
+    "inductor": rmsnorm_inductor_triton,
+    "vllm": rmsnorm_vllm,
+    "flashinfer": rmsnorm_flashinfer,
+    "torch_compile": rmsnorm_torch_compile,
+    "naive": rmsnorm_naive,
+}
+
+
+def ncu_profile_run(
+    kernel_name: str,
+    batch_size: int,
+    seq_len: int,
+    hidden_size: int,
+    use_residual: bool,
+    warmup: int,
+):
+    """NCU-friendly run: warmup launches followed by one profiled launch.
+
+    NCU captures ALL kernel launches. Use --launch-skip <warmup> --launch-count 1
+    in ncu to skip warmup and only profile the final launch.
+    """
+    kernel_fn = KERNEL_REGISTRY[kernel_name]
+    dtype = torch.bfloat16
+    num_tokens = batch_size * seq_len
+
+    x = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device="cuda")
+    weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
+    residual = torch.randn_like(x) if use_residual else None
+
+    print(f"[NCU Profile] kernel={kernel_name}  shape=({batch_size}, {seq_len}, {hidden_size})"
+          f"  num_tokens={num_tokens}  residual={use_residual}  warmup={warmup}")
+
+    for i in range(warmup):
+        kernel_fn(x.clone(), weight, residual.clone() if residual is not None else None)
+    torch.cuda.synchronize()
+    print(f"  warmup done ({warmup} launches)")
+
+    print(f"  profiled launch ...")
+    kernel_fn(x.clone(), weight, residual.clone() if residual is not None else None)
+    torch.cuda.synchronize()
+    print(f"  done.")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -622,20 +667,43 @@ if __name__ == "__main__":
         default="./configs/rmsnorm/",
         help="Path to save rmsnorm benchmark results",
     )
+    parser.add_argument(
+        "--ncu-profile",
+        choices=list(KERNEL_REGISTRY.keys()),
+        default=None,
+        help="NCU profiling mode: only run the specified kernel with warmup + one profiled launch. "
+             "Skips correctness test and full benchmark.",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=3,
+        help="Number of warmup launches before the profiled launch (only used with --ncu-profile)",
+    )
 
     args = parser.parse_args()
 
-    # Run correctness test
-    calculate_diff(
-        batch_size=args.batch_size,
-        seq_len=args.seq_len,
-        hidden_size=args.hidden_size,
-        use_residual=args.use_residual,
-    )
+    if args.ncu_profile:
+        ncu_profile_run(
+            kernel_name=args.ncu_profile,
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            hidden_size=args.hidden_size,
+            use_residual=args.use_residual,
+            warmup=args.warmup,
+        )
+    else:
+        # Run correctness test
+        calculate_diff(
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            hidden_size=args.hidden_size,
+            use_residual=args.use_residual,
+        )
 
-    # Get the benchmark function with proper use_residual setting
-    benchmark = get_benchmark(args.use_residual)
-    # Run performance benchmark
-    import os
-    os.makedirs(args.save_path, exist_ok=True)
-    benchmark.run(print_data=True, show_plots=True, save_path=args.save_path)
+        # Get the benchmark function with proper use_residual setting
+        benchmark = get_benchmark(args.use_residual)
+        # Run performance benchmark
+        import os
+        os.makedirs(args.save_path, exist_ok=True)
+        benchmark.run(print_data=True, show_plots=True, save_path=args.save_path)
