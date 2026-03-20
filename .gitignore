@@ -247,6 +247,9 @@ vllm_profile*/
 # torch_compile trace logs
 tl_out
 *.nsys-rep
+*.ncu-rep
+*.qstrm
+*.log
 
 # 模型下载仓库  
 models/
