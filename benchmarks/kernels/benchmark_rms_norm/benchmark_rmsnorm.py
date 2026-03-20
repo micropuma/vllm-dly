@@ -1,6 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+# Must be set before ANY torch import — torch reads these at module init time.
+import os
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+cwd = os.getcwd()
+os.environ["TORCH_TRACE"] = os.path.join(script_dir, "trace_dir")
+os.environ["TRITON_CACHE_DIR"] = os.path.join(cwd, "cache")
+
+os.environ["TORCH_LOGS"] = "output_code"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 import itertools
 
 import torch
@@ -18,6 +30,7 @@ This benchmark evaluates the performance of RMSNorm implementations across diffe
 - vLLM: The implementation of RMSNorm in the vLLM library.
 - Torch Compile: A PyTorch implementation of RMSNorm that is compiled with torch.compile.
 - Triton: A Triton implementation of RMSNorm.
+- Inductor Triton: A Triton implementation of RMSNorm that is compiled with inductor.
 
 usage example:
 - python benchmarks/kernels/benchmark_rmsnorm.py
@@ -74,12 +87,12 @@ torch._dynamo.config.recompile_limit = 8888
 _RMSNorm_Torch_Compile = torch.compile(
     _rmsnorm_naive,
     fullgraph=True,
-    dynamic=False,
+    dynamic=True,
 )
 _FusedAddRMSNorm_Torch_Compile = torch.compile(
     _fused_add_rmsnorm,
     fullgraph=True,
-    dynamic=False,
+    dynamic=True,
 )
 
 def rmsnorm_torch_compile(
@@ -341,6 +354,100 @@ def rmsnorm_triton(
         return output.view(orig_shape)
 
 
+###############################################################################
+# Inductor-style Triton kernel: 2D tiling + eviction policy + weight amortize
+# Extracted from torch.compile output and generalized to arbitrary shapes.
+# Pure RMSNorm only (no fused residual); falls back to handwritten for fused.
+###############################################################################
+
+def _inductor_style_configs():
+    configs = []
+    for R0_BLOCK in [2048, 4096, 8192]:
+        for XBLOCK in [1, 2, 4]:
+            num_warps = max(1, min(XBLOCK * R0_BLOCK // 512, 8))
+            configs.append(
+                triton.Config({"R0_BLOCK": R0_BLOCK, "XBLOCK": XBLOCK},
+                              num_warps=num_warps)
+            )
+    return configs
+
+
+@triton.autotune(configs=_inductor_style_configs(), key=["xnumel", "r0_numel"])
+@triton.jit
+def _rms_norm_inductor_kernel(
+    X_ptr,       # [xnumel, r0_numel]
+    W_ptr,       # [r0_numel]
+    Out_ptr,     # [xnumel, r0_numel]
+    xnumel,
+    r0_numel,
+    stride,      # X_ptr.stride(0) == Out_ptr.stride(0)
+    eps,
+    XBLOCK: tl.constexpr,
+    R0_BLOCK: tl.constexpr,
+):
+    # 2D tile: xindex is [XBLOCK, 1] (rows), r0_base is [1, R0_BLOCK] (cols).
+    # One program handles XBLOCK rows simultaneously — weight loads are shared.
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
+    xmask = xindex < xnumel
+    r0_base = tl.arange(0, R0_BLOCK)[None, :]
+
+    # Phase 1: sum of squares.  evict_last → keep x in L1 for Phase 2.
+    _var = tl.full([XBLOCK, R0_BLOCK], 0, tl.float32)
+    for r0_off in range(0, r0_numel, R0_BLOCK):
+        cols = r0_off + r0_base
+        rmask = cols < r0_numel
+        x = tl.load(X_ptr + cols + stride * xindex,
+                     rmask & xmask, eviction_policy='evict_last',
+                     other=0.0).to(tl.float32)
+        _var = tl.where(rmask & xmask, _var + x * x, _var)
+
+    var = tl.sum(_var, 1)[:, None]
+    rstd = tl.rsqrt(var / r0_numel + eps)
+
+    # Phase 2: normalize × weight.  evict_first on x (done), evict_last on w
+    # (shared across XBLOCK rows → stays hot in cache).
+    for r0_off in range(0, r0_numel, R0_BLOCK):
+        cols = r0_off + r0_base
+        rmask = cols < r0_numel
+        x = tl.load(X_ptr + cols + stride * xindex,
+                     rmask & xmask, eviction_policy='evict_first',
+                     other=0.0).to(tl.float32)
+        # Weight load: NO xindex term → [1, R0_BLOCK], broadcast to [XBLOCK, R0_BLOCK].
+        # XBLOCK rows share one weight load — the key advantage of 2D tiling.
+        w = tl.load(W_ptr + cols, rmask,
+                     eviction_policy='evict_last', other=0.0).to(tl.float32)
+        y = x * rstd * w
+        tl.store(Out_ptr + cols + stride * xindex, y, rmask & xmask)
+
+
+def rmsnorm_inductor_triton(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    residual: torch.Tensor | None = None,
+    eps: float = 1e-6,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    if residual is not None:
+        return rmsnorm_triton(x, weight, residual, eps)
+
+    assert weight.is_contiguous(), "weight must be contiguous"
+    assert x.stride(-1) == 1, "innermost dim must be contiguous"
+
+    orig_shape = x.shape
+    x = x.view(-1, x.shape[-1])
+    num_tokens, hidden_size = x.shape
+    output = torch.empty_like(x)
+
+    grid = lambda META: (triton.cdiv(num_tokens, META['XBLOCK']),)
+    _rms_norm_inductor_kernel[grid](
+        x, weight, output,
+        num_tokens, hidden_size,
+        x.stride(0),
+        eps,
+    )
+    return output.view(orig_shape)
+
+
 def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
     dtype = torch.bfloat16
     x = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device="cuda")
@@ -362,6 +469,9 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
     output_triton = rmsnorm_triton(
         x.clone(), weight, residual.clone() if residual is not None else None
     )
+    output_inductor = rmsnorm_inductor_triton(
+        x.clone(), weight, residual.clone() if residual is not None else None
+    )
 
     if use_residual:
         output_naive = output_naive[0]
@@ -369,19 +479,21 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
         output_vllm = output_vllm[0]
         output_torch_compile = output_torch_compile[0]
         output_triton = output_triton[0]
+        output_inductor = output_inductor[0]
 
     print(f"Naive output={output_naive}")
     print(f"FlashInfer output={output_flashinfer}")
     print(f"vLLM output={output_vllm}")
     print(f"Torch Compile output={output_torch_compile}")
     print(f"Triton output={output_triton}")
+    print(f"Inductor Triton output={output_inductor}")
 
     all_match = (
         torch.allclose(output_naive, output_flashinfer, atol=1e-2, rtol=1e-2)
         and torch.allclose(output_naive, output_vllm, atol=1e-2, rtol=1e-2)
         and torch.allclose(output_torch_compile, output_vllm, atol=1e-2, rtol=1e-2)
         and torch.allclose(output_triton, output_vllm, atol=1e-2, rtol=1e-2)
-        and torch.allclose(output_torch_compile, output_triton, atol=1e-2, rtol=1e-2)
+        and torch.allclose(output_inductor, output_vllm, atol=1e-2, rtol=1e-2)
     )
     if all_match:
         print("✅ All implementations match")
@@ -401,9 +513,9 @@ def get_benchmark(use_residual):
             x_names=["head_num", "batch_size", "seq_len"],
             x_vals=[list(_) for _ in configs],
             line_arg="provider",
-            line_vals=["huggingface", "flashinfer", "vllm", "torch_compile", "triton"],
-            line_names=["HuggingFace", "FlashInfer", "vLLM", "Torch Compile", "Triton"],
-            styles=[("blue", "-"), ("green", "-"), ("red", "-"), ("orange", "-"), ("purple", "-")],
+            line_vals=["huggingface", "flashinfer", "vllm", "torch_compile", "triton", "inductor_triton"],
+            line_names=["HuggingFace", "FlashInfer", "vLLM", "Torch Compile", "Triton", "Inductor Triton"],
+            styles=[("blue", "-"), ("green", "-"), ("red", "-"), ("orange", "-"), ("purple", "-"), ("brown", "--")],
             ylabel="us",
             plot_name=f"rmsnorm-perf-{'with' if use_residual else 'without'}-residual",
             args={},
@@ -449,6 +561,15 @@ def get_benchmark(use_residual):
         elif provider == "triton":
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: rmsnorm_triton(
+                    x.clone(),
+                    weight,
+                    residual.clone() if residual is not None else None,
+                ),
+                quantiles=quantiles,
+            )
+        elif provider == "inductor_triton":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: rmsnorm_inductor_triton(
                     x.clone(),
                     weight,
                     residual.clone() if residual is not None else None,
