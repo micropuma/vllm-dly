@@ -108,6 +108,69 @@
 
 从 `典型shape输入例子（推理不同阶段）` x `不同参数配置的triton kernel（tradeoff选取）` x `ncu工具（定量分析）` 来进一步验证和指引kernel的编写。
 
+### case1：vLLM x 512 seq x 8192 hidden size
+这里使用的测试脚本：[ncu.sh](./ncu.sh)，使用的配置如下：  
+```shell
+bash ncu.sh gui --kernel vllm --bs 1 --seq 512 --hidden 8192 --warmup 5
+```
+
+这个配置下，grid是512，threadblock大小是256。ncu分析主要按照如下顺序展开：  
+
+1. 先看Speed of Light定位算子类型    
+    ![](./png/speed.md)
+    很明显，RMSNorm是访存密集型。从speed of light来看，访存throughput接近80%，表明算子实现访存表现良好。  
+2. 看[PM sampling](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#pm-sampling) 
+
+    ![](./png/pm_sampling.png)
+    可以看到GPU执行kernel的过程中，各项性能指标是如何随时间动态变化的。这里很明显可以看到如下两个性能瓶颈：    
+    * [wave quantization](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html#wave-quant)现象很显著。  
+        > 一些数学算术： 
+        > 1. 我们的kernel总共需要512个threadblocks，一个threadblock是256个线程，即8个warps。
+        > 2. 根据occupancy（后面会算），SM的occupancy瓶颈是warp数，所以一个SM最多48个warps，最多驻留48/8即6个threadblocks。
+        > 3. 3090总共82个SM，所以一个wavefront最多82x6，即492个block。  
+        > 4. 因此计算完整个kernel要两个wavefront，最后一个wavefront只有20个threadblocks，GPU利用率低。
+    * SM延迟停顿很显著。  
+        ![](./png/latency.png)  
+        对于访存密集算子，延迟停顿是常见现象（[long scoreboard stall](https://modal.com/gpu-glossary/perf/scoreboard-stall)）。要想解决，只有提高计算访存比，做算子融合。
+3. 看compute/memory metrics    
+    ![](./png/memory.png)
+    由于我们的RMSNorm有访存合并优化以及向量化加载（LDB.128），所以memory metrics表现良好。  
+4. warp调度metrics    
+    ![](./png/warp.png)
+    这是我们分析的重点。分析推导链条如下：    
+    * 一个SM有4个subprocess，4个调度器。所以一个调度器最多调度48/4 = 12个warps。  
+    * 调度器维护一个warp池，里面有活跃warp（等待完成）。活跃warp分为两类（eligible：没有stall，可以在当前cycle发射，noneligible：可能因为访问存储等原因stall的）。  
+    * 图中active warps是9.54，该值是平均值，因为第二个wavefront的warps数目很少，拉低了可调度warps数目。
+    * eligible warp相当少。这一块需要结合warp state statistics session分析：warp都是stall long board，即等待访问存储。  
+5. Occupancy metrics  
+    ![](./png/occupancy.png)
+    这个session告诉我们哪种硬件资源限制了每SM能驻留多少block数：  
+    ```shell
+    Block Limit SM:          16    (硬件上限)
+    Block Limit Registers:    8    (65536 regs / (30 regs × 256 threads) = 8.5 → 8)
+    Block Limit Warps:        6    (48 warps / 8 warps/block = 6)  ← 瓶颈
+    Block Limit Shared Mem:  12    (~100KB / 168B/block)
+    ```
+
+    理论 100% 说明资源配置没问题——如果 SM 能持续保持 6 个 block 驻留，就能达到满 occupancy。84.93% 的缺口完全来自 tail wave 时 SM 空闲，不是 kernel 本身的问题。
+
+    上述表明，我们现在的瓶颈是一个block的block_size太大了，影响SM上驻留的block数目，从而影响调度overlap。可优化方向是尝试不同尺寸的block_szie。下图是整个occupancy + wavefront的推导流程图：  
+
+    ![](./png/flow.png)  
+
+    依据这个推导流程，如果将threadblock从256变成128，会带来如下变化：  
+    1. occupancy砍半，只有50%  
+    2. 不存在wave tile问题
+
+    结论：对于[batch_size, num_tokens]较小的decode阶段，可能有利（消除了tail的收益）。
+
+
+
+
+
+
+
+
 ## 有趣的尝试  
 ### Triton的autotune机制  
 autotune，顾名思义就是排列组合各种参数配置，然后针对给定的shape输入大小下逐一尝试，得到最优配置。其有如下overhead：  
@@ -116,3 +179,5 @@ autotune，顾名思义就是排列组合各种参数配置，然后针对给定
 * 如何平衡kernel cache大小和运行时开销？
 
 ### FlashInfer的编译尝试
+
+### Torch Compile编译尝试
