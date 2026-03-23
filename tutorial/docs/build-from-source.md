@@ -96,7 +96,7 @@ uv pip install -e .
                (editable install 下 .so 直接在源码树中，import 时直接找到)
 ```
 
-一个简易的demo，参见 [uv-tutorial demo3]()。
+一个简易的demo，参见 [uv-tutorial demo3](https://github.com/micropuma/uv-tutorial/tree/main/examples/python_plus_cpp_demo)。
 
 ## References  
 1. [vLLM GPU build from source](https://docs.vllm.ai/en/stable/getting_started/installation/gpu/)
