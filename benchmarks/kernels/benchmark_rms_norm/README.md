@@ -165,12 +165,6 @@ bash ncu.sh gui --kernel vllm --bs 1 --seq 512 --hidden 8192 --warmup 5
     结论：对于[batch_size, num_tokens]较小的decode阶段，可能有利（消除了tail的收益）。
 
 
-
-
-
-
-
-
 ## 有趣的尝试  
 ### Triton的autotune机制  
 autotune，顾名思义就是排列组合各种参数配置，然后针对给定的shape输入大小下逐一尝试，得到最优配置。其有如下overhead：  
@@ -178,6 +172,9 @@ autotune，顾名思义就是排列组合各种参数配置，然后针对给定
 * 需要warmup，inference阶段如果无法cache hit，tune开销 + recompile开销难以接受。  
 * 如何平衡kernel cache大小和运行时开销？
 
+参考 [triton-dejavu](https://github.com/IBM/triton-dejavu)项目。
+
 ### FlashInfer的编译尝试
 
 ### Torch Compile编译尝试
+参考[pytorch kernel compile deepdive](https://www.abhik.ai/articles/compiling-pytorch-kernel)博客。
