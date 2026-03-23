@@ -112,7 +112,7 @@ def rmsnorm_vllm(
 
 
 def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
-    dtype = torch.bfloat16
+    dtype = torch.float16
     x = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device="cuda")
     weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
     residual = torch.randn_like(x) if use_residual else None
@@ -165,7 +165,7 @@ def get_benchmark(use_residual):
         )
     )
     def benchmark(head_num, batch_size, seq_len, provider):
-        dtype = torch.bfloat16
+        dtype = torch.float32
         hidden_size = head_num * 128  # assuming head_dim = 128
 
         x = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device="cuda")
@@ -250,6 +250,6 @@ if __name__ == "__main__":
     )
 
     # Get the benchmark function with proper use_residual setting
-    benchmark = get_benchmark(args.use_residual)
+    # benchmark = get_benchmark(args.use_residual)
     # Run performance benchmark
-    benchmark.run(print_data=True, save_path=args.save_path)
+    # benchmark.run(print_data=True, save_path=args.save_path)

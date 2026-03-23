@@ -680,8 +680,18 @@ if __name__ == "__main__":
         default=3,
         help="Number of warmup launches before the profiled launch (only used with --ncu-profile)",
     )
+    parser.add_argument(
+        "--show-configs",
+        action="store_true",
+        help="Print the config selection table for various shapes and exit.",
+    )
 
     args = parser.parse_args()
+
+    if args.show_configs:
+        show_config_table()
+        import sys
+        sys.exit(0)
 
     if args.ncu_profile:
         ncu_profile_run(

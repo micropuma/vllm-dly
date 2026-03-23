@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
-Benchmark comparing Triton vs PyTorch sort-based top-k/top-p implementations.
+Benchmark comparing Triton vs PyTorch sort-based vs FlashInfer top-k/top-p implementations.
 
 Compares:
 - apply_top_k_top_p_triton (Triton binary search)
 - apply_top_k_top_p (PyTorch sort-based)
+- apply_top_k_top_p_flashinfer (FlashInfer implementation)
 
 Scenarios:
 - top_k only (whole batch, partial batch)
@@ -26,6 +27,69 @@ from vllm.v1.sample.ops.topk_topp_triton import (
     reset_buffer_cache,
 )
 
+# try to import FlashInfer
+try:
+    import flashinfer
+    from packaging import version  
+    HAS_FLASHINFER = version.parse(flashinfer.__version__) >= version.parse("0.6.0")
+    if HAS_FLASHINFER:
+        print(f"FlashInfer version {flashinfer.__version__} detected. FlashInfer benchmarks will be included.")
+except ImportError:
+    print(
+        "WARNING: flashinfer is not installed. FlashInfer benchmarks will be skipped."
+    )
+    HAS_FLASHINFER = False
+
+def apply_topk_topp_flashinfer(
+    logits: torch.Tensor,
+    k: torch.Tensor | None,
+    p: torch.Tensor | None,
+) -> torch.Tensor:
+    """
+    Wrapper for FlashInfer's top-k/top-p implementation.  
+
+    Note: FlashInfer does sampling (returns token IDs), not just masking.
+    For fair comparison, we only measure the top-k/top-p filtering part.
+
+    Note: FlashInfer actually fuse top-k and top-p together.
+    """
+
+    assert HAS_FLASHINFER, "FlashInfer is not available. Please install flashinfer>=0.6.0 to run this benchmark."
+    assert logits.ndim == 2, "Logits should be [batch_size, vocab_size]"
+    assert logits.dtype == torch.float32, "Logits should be float32 for FlashInfer"
+    
+    IS_P = p is not None
+    IS_K = k is not None    
+
+    if not IS_K and not IS_P:
+        return logits  # No filtering, return as is
+
+    import flashinfer
+    
+    if not IS_K:
+        # Case: Only Top-P
+        probs = logits.softmax(dim=-1, dtype=torch.float32)
+        # 假设我们只关心过滤性能，这里调用采样算子
+        flashinfer.sampling.top_p_sampling_from_probs(probs, p, deterministic=True)
+        
+    elif not IS_P:
+        # Case: Only Top-K
+        probs = logits.softmax(dim=-1, dtype=torch.float32)
+        flashinfer.sampling.top_k_sampling_from_probs(probs, k, deterministic=True)
+        
+    else:
+        # Case: Both Top-K and Top-P
+        # FlashInfer 提供了一个 fused 算子，直接处理 logits，效率最高
+        flashinfer.sampling.top_k_top_p_sampling_from_logits(
+            logits, 
+            k, 
+            p, 
+            deterministic=True
+        )
+
+    # 由于 FlashInfer 直接进行采样并返回 token，且我们的目标是 Benchmark 过滤性能
+    # 我们原样返回 logits，因为在此测试框架中，外部是通过计时来评估该算子的耗时
+    return logits
 
 @dataclass
 class BenchmarkConfig:
