@@ -6,6 +6,8 @@ import torch
 from vllm.platforms import current_platform
 
 
+# TODO(leon)：算子调用入口
+# 先尝试cuda，如果没有cuda算子或是shape不匹配，再回退到triton版本。
 def merge_attn_states(
     output: torch.Tensor,
     prefix_output: torch.Tensor,

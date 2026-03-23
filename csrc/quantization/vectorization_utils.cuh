@@ -109,6 +109,7 @@ struct DefaultReadVecOp {
   }
 };
 
+// 向量化读取辅助函数，处理初始地址没有对齐以及尾部没有对齐的情况
 // read-only version: iterate over the input with alignment guarantees
 template <int VEC_SIZE, typename InT, typename VecOp, typename ScaOp>
 __device__ inline void vectorize_read_with_alignment(const InT* in, int len,

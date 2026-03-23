@@ -9,8 +9,13 @@
 
 namespace vllm {
 
+// TODO(leon): 非常好的example cuda kernel code
+// 1. 朴素的向量化加载和存储实现  
+// 2. 多维度 和 一维度的来回转换  
+// 很好的访存密集的算子模板
 // Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
 // can be used to combine partial attention results (in the split-KV case)
+// lse涉及精度问题，必须是float
 template <typename scalar_t, const uint NUM_THREADS>
 __global__ void merge_attn_states_kernel(
     scalar_t* output, float* output_lse, const scalar_t* prefix_output,
@@ -22,6 +27,8 @@ __global__ void merge_attn_states_kernel(
   const uint pack_size = 16 / sizeof(scalar_t);
   const uint threads_per_head = head_size / pack_size;
 
+  // 将一维映射回三维 [num_tokens * num_heads * head_size] -> [num_tokens, num_heads, head_size]
+  // 同时要考虑第四个维度，向量化的pack维度
   const uint global_idx = blockIdx.x * NUM_THREADS + threadIdx.x;
   const uint token_head_threads = num_tokens * num_heads * threads_per_head;
 
@@ -43,6 +50,7 @@ __global__ void merge_attn_states_kernel(
   const scalar_t* suffix_head_ptr = suffix_output + src_head_offset;
   scalar_t* output_head_ptr = output + dst_head_offset;
 
+  // prefix_output和suffix_output必须使用专门的stide，因为FA2/FA3
   float p_lse = prefix_lse[head_idx * num_tokens + token_idx];
   float s_lse = suffix_lse[head_idx * num_tokens + token_idx];
   p_lse = std::isinf(p_lse) ? -std::numeric_limits<float>::infinity() : p_lse;
@@ -110,6 +118,7 @@ __global__ void merge_attn_states_kernel(
         o_out_pack;
   }
   // We only need to write to output_lse once per head.
+  // lse是hidde_size维度的规约，shape是[num_heads, num_tokens]
   if (output_lse != nullptr && pack_idx == 0) {
     float out_lse = logf(out_se) + max_lse;
     output_lse[head_idx * num_tokens + token_idx] = out_lse;
@@ -165,13 +174,15 @@ void merge_attn_states_launcher(torch::Tensor& output,
                                 const torch::Tensor& prefix_lse,
                                 const torch::Tensor& suffix_output,
                                 const torch::Tensor& suffix_lse) {
+  // 将 [num_tokens, num_heads, head_size] 转换为 [num_tokens * num_heads * head_size]
+  // 然后每个线程处理一个pack_size(16/sizeof(scalar_t))个元素，总共需要 num_tokens * num_heads * head_size / pack_size 个线程
   constexpr uint NUM_THREADS = 128;
   const uint num_tokens = output.size(0);
   const uint num_heads = output.size(1);
   const uint head_size = output.size(2);
   const uint prefix_head_stride = prefix_output.stride(1);
   const uint output_head_stride = output.stride(1);
-  const uint pack_size = 16 / sizeof(scalar_t);
+  const uint pack_size = 16 / sizeof(scalar_t);    // 一个cacheline是128 bits
   TORCH_CHECK(head_size % pack_size == 0,
               "headsize must be multiple of pack_size:", pack_size);
   float* output_lse_ptr = nullptr;
@@ -180,6 +191,7 @@ void merge_attn_states_launcher(torch::Tensor& output,
   }
   // Process one pack elements per thread. for float, the
   // pack_size is 4 for half/bf16, the pack_size is 8.
+  // 一个thread处理一个pack的数据，算出总共要多少thread。一个block定死是128。
   const uint threads_per_head = head_size / pack_size;
   const uint total_threads = num_tokens * num_heads * threads_per_head;
 

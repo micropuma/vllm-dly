@@ -251,5 +251,8 @@ tl_out
 *.qstrm
 *.log
 
-# 模型下载仓库  
+# model repository
 models/
+
+# caches for triton compilation  
+cache/

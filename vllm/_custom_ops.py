@@ -183,6 +183,7 @@ def mla_decode_kvcache_cpu(
     )
 
 
+# python binding的入口函数
 # merge attn states ops
 def merge_attn_states(
     output: torch.Tensor,

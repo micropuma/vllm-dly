@@ -51,7 +51,7 @@ def _is_oink_stride_compatible_2d(x_2d: torch.Tensor) -> bool:
         return False
     return (x_2d.stride(0) % divby) == 0
 
-
+# cuda算子python wrapper接口
 def rms_norm(
     x: torch.Tensor, weight: torch.Tensor, variance_epsilon: float
 ) -> torch.Tensor:

@@ -279,6 +279,7 @@ endif()
 # _C extension
 #
 
+# 自定义cuda kernel需要添加
 set(VLLM_EXT_SRC
   "csrc/mamba/mamba_ssm/selective_scan_fwd.cu"
   "csrc/cache_kernels.cu"

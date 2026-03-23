@@ -21,7 +21,7 @@ __global__ void rms_norm_kernel(
     const int64_t input_shape_d3,         // input.size(-3)
     const scalar_t* __restrict__ weight,  // [hidden_size]
     const float epsilon, const int num_tokens, const int hidden_size) {
-  __shared__ float s_variance;
+  __shared__ float s_variance;            // 一个blocksize的thread处理一行rmsnorm，所以共享一个variance
   float variance = 0.0f;
   const scalar_t* input_row;
   if constexpr (NUM_DIMS == 2) {
@@ -43,11 +43,12 @@ __global__ void rms_norm_kernel(
                 seq_idx * input_stride_d3 + head_idx * input_stride_d2;
   }
 
+  // 传入的是打包好的vectorized weight，所以这里也要以vec_size为步长进行访问
   auto vec_op = [&variance](const vec_n_t<scalar_t, VEC_SIZE>& vec) {
 #pragma unroll
     for (int i = 0; i < VEC_SIZE; ++i) {
       float x = static_cast<float>(vec.val[i]);
-      variance += x * x;
+      variance += x * x;       
     }
   };
   auto scalar_op = [&variance](const scalar_t& val) {
@@ -70,6 +71,8 @@ __global__ void rms_norm_kernel(
   auto* v_in = reinterpret_cast<const vec_n_t<scalar_t, VEC_SIZE>*>(input_row);
   auto* v_w = reinterpret_cast<const vec_n_t<scalar_t, VEC_SIZE>*>(weight);
   auto* v_out = reinterpret_cast<vec_n_t<scalar_t, VEC_SIZE>*>(out_row);
+
+  // 一个thread处理VEC_SIZE个元素
   for (int i = threadIdx.x; i < hidden_size / VEC_SIZE; i += blockDim.x) {
     vec_n_t<scalar_t, VEC_SIZE> dst;
     vec_n_t<scalar_t, VEC_SIZE> src1 = v_in[i];
@@ -95,8 +98,9 @@ fused_add_rms_norm_kernel(
     scalar_t* __restrict__ residual,      // [..., hidden_size]
     const scalar_t* __restrict__ weight,  // [hidden_size]
     const float epsilon, const int num_tokens, const int hidden_size) {
+  // TODO(leon)：深入dump学习POD类型
   // Sanity checks on our vector struct and type-punned pointer arithmetic
-  static_assert(std::is_pod_v<_f16Vec<scalar_t, width>>);
+  static_assert(std::is_pod_v<_f16Vec<scalar_t, width>>);            // 判断是否是POD类型
   static_assert(sizeof(_f16Vec<scalar_t, width>) == sizeof(scalar_t) * width);
 
   const int vec_hidden_size = hidden_size / width;
@@ -116,6 +120,8 @@ fused_add_rms_norm_kernel(
   for (int idx = threadIdx.x; idx < vec_hidden_size; idx += blockDim.x) {
     int id = blockIdx.x * vec_hidden_size + idx;
     int64_t strided_id = blockIdx.x * vec_input_stride + idx;
+
+    // input可能来自一个大矩阵，有stride间隔
     _f16Vec<scalar_t, width> temp = input_v[strided_id];
     temp += residual_v[id];
     variance += temp.sum_squares();
@@ -144,8 +150,9 @@ fused_add_rms_norm_kernel(
 /* Generic fused_add_rms_norm_kernel
    The width field is not used here but necessary for other specializations.
  */
+// enable_if_t默认返回void，等价于 enable_if<condition, void>::type
 template <typename scalar_t, int width>
-__global__ std::enable_if_t<(width == 0) || !_typeConvert<scalar_t>::exists>
+__global__ std::enable_if_t<(width == 0) || !_typeConvert<scalar_t>::exists>   
 fused_add_rms_norm_kernel(
     scalar_t* __restrict__ input,  // [..., hidden_size]
     const int64_t input_stride,
@@ -196,6 +203,7 @@ void rms_norm(torch::Tensor& out,     // [..., hidden_size]
 
   int num_tokens = input.numel() / hidden_size;
   int num_dims = input.dim();
+  // [batch, numheads, seq_len, head_dim] 四个维度，最后一个维度是head_dim
   int64_t input_stride_d2 = input.stride(-2);
   int64_t input_stride_d3 = (num_dims >= 3) ? input.stride(-3) : 0;
   int64_t input_stride_d4 = (num_dims >= 4) ? input.stride(-4) : 0;
@@ -203,6 +211,8 @@ void rms_norm(torch::Tensor& out,     // [..., hidden_size]
   int64_t input_shape_d3 = (num_dims >= 4) ? input.size(-3) : 0;
 
   // For large num_tokens, use smaller blocks to increase SM concurrency.
+  // (1) decode阶段，num_tokens较小，grid只有一个block，blocksize尽量大，用更多线程  
+  // (2) prefill阶段且num_tokens较大，一个SM可以launch多个blocks，所以blockSIZE尽量小，增加block数量，提升并行度，隐藏内存访问延迟
   const int max_block_size = (num_tokens < 256) ? 1024 : 256;
   dim3 grid(num_tokens);
   const at::cuda::OptionalCUDAGuard device_guard(device_of(input));
@@ -210,7 +220,7 @@ void rms_norm(torch::Tensor& out,     // [..., hidden_size]
   VLLM_DISPATCH_RANK234(num_dims, [&] {
     VLLM_DISPATCH_FLOATING_TYPES(input.scalar_type(), "rms_norm_kernel", [&] {
       const int calculated_vec_size =
-          std::gcd(16 / sizeof(scalar_t), hidden_size);
+          std::gcd(16 / sizeof(scalar_t), hidden_size);      // 尽量以128bit为单位进行搬运
       const int block_size =
           std::min(hidden_size / calculated_vec_size, max_block_size);
       dim3 block(block_size);
@@ -277,6 +287,8 @@ void fused_add_rms_norm(torch::Tensor& input,     // [..., hidden_size]
   bool offsets_are_multiple_of_vector_width =
       hidden_size % vector_width == 0 && input_stride % vector_width == 0;
   bool batch_invariant_launch = vllm::vllm_is_batch_invariant();
+
+  // 判断是否满足条件，满足则使用向量化版本，否则使用非向量化版本
   if (ptrs_are_aligned && offsets_are_multiple_of_vector_width &&
       !batch_invariant_launch) {
     LAUNCH_FUSED_ADD_RMS_NORM(8);

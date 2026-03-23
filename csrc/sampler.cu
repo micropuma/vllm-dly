@@ -12,6 +12,9 @@
 
 namespace vllm {
 
+// blockIdx.x 是 sequence id
+// blockIdx.y 是 tile id，表示这个block处理这个sequence的哪个tile
+// threadIdx.x 是这个block内的线程id，每个线程处理tile内的多个vocab id
 template <typename scalar_t>
 __global__ void apply_repetition_penalties_kernel(
     scalar_t* __restrict__ logits,         // [num_seqs, vocab_size]
@@ -31,10 +34,10 @@ __global__ void apply_repetition_penalties_kernel(
 
   // Each thread processes multiple vocab items within the tile
   for (int vocab_idx = tile_start + threadIdx.x; vocab_idx < tile_end;
-       vocab_idx += blockDim.x) {
+       vocab_idx += blockDim.x) {           // 理想情况下是每个线程处理一个vocab id，如果tile_size > blockDim.x，则每个线程处理多个vocab id （threads限制为1024）
     const int64_t idx = static_cast<int64_t>(seq_idx) * vocab_size + vocab_idx;
-    const bool is_repeated = prompt_mask[idx] || output_mask[idx];
-    if (is_repeated) {
+    const bool is_repeated = prompt_mask[idx] || output_mask[idx];     // 输出重复或是promt重复
+    if (is_repeated) {                                                 // 将logits的值压向0点
       scalar_t logit = logits[idx];
       if (logit > 0) {
         logits[idx] = logit / penalty;
@@ -624,8 +627,8 @@ void apply_repetition_penalties_(
 
   // Compute tile_num and tile_size
   int tile_num =
-      std::min(vocab_size, std::max(1, (sms + num_seqs - 1) / num_seqs));
-  int tile_size = (vocab_size + tile_num - 1) / tile_num;
+      std::min(vocab_size, std::max(1, (sms + num_seqs - 1) / num_seqs));     // 计算多少个block协同工作一个seq
+  int tile_size = (vocab_size + tile_num - 1) / tile_num;                                
 
   // Each block handles one sequence and a tile of vocab
   dim3 grid(num_seqs, tile_num);

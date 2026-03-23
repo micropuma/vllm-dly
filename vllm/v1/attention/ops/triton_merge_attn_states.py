@@ -9,7 +9,7 @@ from vllm.triton_utils import tl, triton
 # Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
 # can be used to combine partial attention results (in the split-KV case)
 def merge_attn_states(
-    output: torch.Tensor,
+    output: torch.Tensor,                                # [num_tokens, num_query_heads, head_size]
     prefix_output: torch.Tensor,
     prefix_lse: torch.Tensor,
     suffix_output: torch.Tensor,
@@ -71,6 +71,7 @@ def merge_attn_states_kernel(
     p_lse = float("-inf") if p_lse == float("inf") else p_lse
     s_lse = float("-inf") if s_lse == float("inf") else s_lse
 
+    # safe softmax enabled
     max_lse = tl.maximum(p_lse, s_lse)
     p_lse = p_lse - max_lse
     s_lse = s_lse - max_lse
@@ -114,3 +115,5 @@ def merge_attn_states_kernel(
         out,
         mask=head_mask,
     )
+
+

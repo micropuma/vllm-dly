@@ -53,6 +53,8 @@ void paged_attention_v2(
     const int64_t blocksparse_vert_stride, const int64_t blocksparse_block_size,
     const int64_t blocksparse_head_sliding_step);
 
+// C wrapper，编译生成在_C.so动态库中，
+// 然后python通过torch.ops._C.merge_attn_states
 void merge_attn_states(torch::Tensor& output,
                        std::optional<torch::Tensor> output_lse,
                        const torch::Tensor& prefix_output,

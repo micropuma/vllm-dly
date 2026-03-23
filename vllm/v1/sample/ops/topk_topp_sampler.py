@@ -322,6 +322,7 @@ def apply_top_k_only(logits: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     return logits.masked_fill_(logits < top_k_mask, -float("inf"))
 
 
+# TODO(leon)：深入随机采样Gumbel-max trick的原理，尝试进一步减少GPU overhead
 def random_sample(
     probs: torch.Tensor,
     generators: dict[int, torch.Generator],
