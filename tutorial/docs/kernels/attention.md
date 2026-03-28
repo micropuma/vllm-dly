@@ -1,5 +1,104 @@
 # vLLM Attention 深度解析
 
+```mermaid  
+flowchart TD
+    subgraph MODEL["① 模型层 (Model Layer)"]
+        M1["Qwen3Attention / LlamaAttention\n等各模型 Attention 模块"]
+        M2["self.attn = Attention(\n  num_heads, head_dim, scale,\n  cache_config, quant_config,\n  attn_type=DECODER\n)"]
+        M3["self.attn.forward(query, key, value)"]
+    end
+
+    subgraph LAYER["② Attention 包装层\nvllm/model_executor/layers/attention/attention.py"]
+        L1["Attention.__init__()"]
+        L2["get_attn_backend(\n  head_size, dtype,\n  kv_cache_dtype, block_size,\n  use_mla, attn_type, ...\n)"]
+        L3["self.attn_backend = FlashAttentionBackend\nimpl_cls = attn_backend.get_impl_cls()\nself.impl = FlashAttentionImpl(...)"]
+        L4["Attention.forward(q, k, v)"]
+        L5["unified_attention_with_output()\n或 self.impl.forward(q, k, v, kv_cache, attn_metadata)"]
+    end
+
+    subgraph SELECTOR["③ Backend 选择器\nvllm/v1/attention/selector.py"]
+        S1["get_attn_backend()"]
+        S2["构建 AttentionSelectorConfig\n(head_size, dtype, kv_cache_dtype,\nblock_size, use_mla, attn_type, ...)"]
+        S3["_cached_get_attn_backend(\n  backend=vllm_config.attention_config.backend,\n  attn_selector_config\n)"]
+        S4["current_platform.get_attn_backend_cls()\n→ resolve_obj_by_qualname(class_path)\n→ 返回 Backend 类"]
+    end
+
+    subgraph PLATFORM["④ 平台选择逻辑\nvllm/platforms/cuda.py :: CudaPlatform"]
+        P1["get_attn_backend_cls(\n  selected_backend, attn_selector_config\n)"]
+        P2{"selected_backend\n显式指定?"}
+        P3["validate_configuration()\n检查兼容性"]
+        P4["返回 selected_backend.get_path()"]
+        P5["_get_backend_priorities(\n  use_mla, device_capability, num_heads\n)\n→ 按优先级排列候选列表"]
+        P6["get_valid_backends()\n逐一调用 backend_class.validate_configuration()\n过滤不兼容的 backend"]
+        P7["选最高优先级有效 backend\n返回其 class_path"]
+
+        subgraph PRIO["优先级列表 (非MLA, sm_89/sm_90)"]
+            direction LR
+            PA["① FLASH_ATTN\n(默认首选)"]
+            PB["② FLASHINFER"]
+            PC["③ TRITON_ATTN"]
+            PD["④ FLEX_ATTENTION"]
+        end
+    end
+
+    subgraph REGISTRY["⑤ Backend 注册表\nvllm/v1/attention/backends/registry.py"]
+        R1["AttentionBackendEnum\nFLASH_ATTN → FlashAttentionBackend\nFLASHINFER  → FlashInferBackend\nTRITON_ATTN → TritonAttentionBackend\n..."]
+    end
+
+    subgraph BACKEND["⑥ Backend 实现\nvllm/v1/attention/backends/flash_attn.py"]
+        B1["FlashAttentionBackend\n(AttentionBackend 抽象类实现)\n- get_name() → 'FLASH_ATTN'\n- get_impl_cls() → FlashAttentionImpl\n- get_builder_cls() → FlashAttnMetadataBuilder\n- validate_configuration()"]
+        B2["FlashAttentionImpl\n(AttentionImpl 实现)\n.forward(layer, q, k, v, kv_cache, attn_metadata)"]
+    end
+
+    subgraph KERNEL["⑦ CUDA Kernel 调用\nvllm/vllm_flash_attn/"]
+        K1["reshape_and_cache_flash(\n  key, value,\n  key_cache, value_cache,\n  slot_mapping\n)\n→ 将 K/V 写入 Paged KV Cache"]
+        K2["flash_attn_varlen_func(\n  q, k_cache, v_cache, out,\n  cu_seqlens_q, seqused_k,\n  block_table, causal=True, ...\n)\n→ FlashAttention-2/3 CUDA Kernel"]
+        K3["输出: output tensor\n[num_tokens, num_heads × head_size]"]
+    end
+
+    %% 初始化流程
+    M1 --> M2
+    M2 --> L1
+    L1 --> L2
+    L2 --> S1
+    S1 --> S2
+    S2 --> S3
+    S3 --> P1
+    P1 --> P2
+    P2 -- "是 (env VLLM_ATTENTION_BACKEND\n或 global forced backend)" --> P3
+    P3 -- "通过" --> P4
+    P2 -- "否 (自动选择)" --> P5
+    P5 --> PRIO
+    PRIO --> P6
+    P6 --> P7
+    P4 --> R1
+    P7 --> R1
+    R1 -- "get_path() → class_path\nresolve_obj_by_qualname()" --> S4
+    S4 --> L3
+    L3 --> B1
+    B1 -- "get_impl_cls()" --> B2
+
+    %% 推理流程
+    M3 --> L4
+    L4 --> L5
+    L5 --> B2
+    B2 --> K1
+    K1 --> K2
+    K2 --> K3
+
+    %% 样式
+    classDef initPhase fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef inferPhase fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef kernelBox fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef platformBox fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+    classDef registryBox fill:#ffe4e6,stroke:#e11d48,color:#4c0519
+
+    class M1,M2,L1,L2,L3,S1,S2,S3,S4,P1,P2,P3,P4,P5,P6,P7,R1,B1 initPhase
+    class M3,L4,L5,B2 inferPhase
+    class K1,K2,K3 kernelBox
+
+```
+
 > 代码路径索引：
 > - [`vllm/model_executor/layers/attention/attention.py`](../../../vllm/model_executor/layers/attention/attention.py) — `Attention` nn.Module（层入口）
 > - [`vllm/v1/attention/selector.py`](../../../vllm/v1/attention/selector.py) — Backend 选择逻辑
