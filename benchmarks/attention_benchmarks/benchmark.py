@@ -10,7 +10,7 @@ Supports standard attention (Flash/Triton/FlashInfer) and MLA backends.
 
 Examples:
     # Standard attention
-    python benchmark.py --backends flash flashinfer --batch-specs "q2k" "8q1s1k"
+    python benchmark.py --backends FLASH_ATTN FLASHINFER --batch-specs "q2k" "8q1s1k"
 
     # MLA backends
     python benchmark.py --backends cutlass_mla flashinfer_mla --batch-specs "64q1s1k"
