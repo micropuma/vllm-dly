@@ -99,6 +99,15 @@ flowchart TD
 
 ```
 
+| 层级 | 文件 | 职责 |
+|------|------|------|
+| ① 模型层 | `models/qwen3.py` 等 | 构造 `Attention(...)` 对象 |
+| ② Attention 包装层 | `layers/attention/attention.py` | 调用 backend 选择，实例化 impl |
+| ③ 选择器 | `v1/attention/selector.py` | 封装配置参数，走缓存查询 |
+| ④ 平台逻辑 | `platforms/cuda.py` | 显式指定 → 验证；未指定 → 按优先级自动选 |
+| ⑤ 注册表 | `backends/registry.py` | `AttentionBackendEnum` 维护名称 → class_path 映射 |
+| ⑥ Backend 类 | `backends/flash_attn.py` | 抽象接口的具体实现，给出 Impl 类 |
+
 > 代码路径索引：
 > - [`vllm/model_executor/layers/attention/attention.py`](../../../vllm/model_executor/layers/attention/attention.py) — `Attention` nn.Module（层入口）
 > - [`vllm/v1/attention/selector.py`](../../../vllm/v1/attention/selector.py) — Backend 选择逻辑
