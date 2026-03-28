@@ -173,6 +173,7 @@ def _init_kv_cache_quant(
         layer.quant_method.create_weights(layer)
 
 
+# 注意力算子的入口
 class Attention(nn.Module, AttentionLayerBase):
     """Attention layer.
 
@@ -271,7 +272,7 @@ class Attention(nn.Module, AttentionLayerBase):
         # weight and activation dtype.
         dtype = torch.get_default_dtype()
         if attn_backend is None:
-            self.attn_backend = get_attn_backend(
+            self.attn_backend = get_attn_backend(    # 这里选择attention的后端
                 head_size,
                 dtype,
                 kv_cache_dtype,
@@ -451,7 +452,7 @@ class Attention(nn.Module, AttentionLayerBase):
                     kv_cache_dummy_dep=kv_cache_dummy_dep,
                 )
             else:
-                # Skip this if sharing KV cache with an earlier attention layer.   # dump kv cache机制
+                # Skip this if sharing KV cache with an earlier attention layer.
                 if (
                     not self.attn_backend.forward_includes_kv_cache_update
                     and self.kv_sharing_target_layer_name is None
