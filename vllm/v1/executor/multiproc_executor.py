@@ -90,6 +90,7 @@ class FutureWrapper(Future):
                 self.set_exception(e)
 
 
+# 负责把 SchedulerOutput 广播给 worker。
 class MultiprocExecutor(Executor):
     supports_pp: bool = True
 
@@ -97,6 +98,7 @@ class MultiprocExecutor(Executor):
         self.monitor_workers = monitor_workers
         super().__init__(vllm_config)
 
+    # TODO(leon)：初始化 executor的核心代码
     def _init_executor(self) -> None:
         # Call self.shutdown at exit to clean up
         # and ensure workers will be terminated.
@@ -127,7 +129,7 @@ class MultiprocExecutor(Executor):
         if self.parallel_config.node_rank_within_dp == 0:
             # For leader node within each dp rank,
             # each dp will have its own leader multiproc executor.
-            max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
+            max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024    # 16 MB，似乎和之前版本有了更新？
             self.rpc_broadcast_mq = MessageQueue(
                 self.world_size,
                 self.local_world_size,
@@ -144,6 +146,7 @@ class MultiprocExecutor(Executor):
             global_start_rank = (
                 self.local_world_size * self.parallel_config.node_rank_within_dp
             )
+            # 每一个 rank 初始化一个worker
             for local_rank in range(self.local_world_size):
                 global_rank = global_start_rank + local_rank
                 is_driver_worker = self._is_driver_worker(global_rank)
@@ -187,6 +190,7 @@ class MultiprocExecutor(Executor):
             # Ensure message queues are ready. Will deadlock if re-ordered
             # Must be kept consistent with the WorkerProc.
 
+            # 小数据用 共享内存的环形缓冲队列来做
             # Wait for all input mqs to be ready.
             if self.rpc_broadcast_mq is not None:
                 self.rpc_broadcast_mq.wait_until_ready()
@@ -300,6 +304,7 @@ class MultiprocExecutor(Executor):
             "take_draft_token_ids", unique_reply_rank=self.output_rank
         )
 
+    # proc executor和worker proc通信的核心函数，负责把rpc广播给worker proc，并等待结果返回
     def collective_rpc(  # type: ignore[override]
         self,
         method: str | Callable,
@@ -828,6 +833,7 @@ class WorkerProc:
         if (response_mq := self.worker_response_mq) is not None:
             response_mq.enqueue(result)
 
+    # 重构，解耦online serving 和 offline serving
     def handle_output(self, output: Any):
         """Handles output from the worker. If async scheduling is enabled,
         it is passed to the async_output_busy_loop thread. Otherwise, it is
@@ -848,6 +854,7 @@ class WorkerProc:
         """Main busy loop for Multiprocessing Workers"""
         assert self.rpc_broadcast_mq is not None
         while True:
+            # Mpexecutor给每个worker通过rpc传输metadata（深入dequeue发现，小数据走shm，大数据走zmq socket）
             method, args, kwargs, output_rank = self.rpc_broadcast_mq.dequeue(
                 cancel=cancel, indefinite=True
             )

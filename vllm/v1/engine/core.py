@@ -105,7 +105,11 @@ class EngineCore:
 
         self.log_stats = log_stats
 
+        # 初始化 model_executor 和 scheduler，然后model executor会初始化 各个worker的 processor
+
         # Setup Model.
+        # 初始化executor，exector会初始化好各个worker
+        # 这一步，模型权重已经被加载到各个worker
         self.model_executor = executor_class(vllm_config)
         if executor_fail_callback is not None:
             self.model_executor.register_failure_callback(executor_fail_callback)
@@ -113,6 +117,7 @@ class EngineCore:
         self.available_gpu_memory_for_kv_cache = -1
 
         # Setup KV Caches and update CacheConfig after profiling.
+        # kv cache初始化流程
         num_gpu_blocks, num_cpu_blocks, kv_cache_config = self._initialize_kv_caches(
             vllm_config
         )
@@ -231,6 +236,21 @@ class EngineCore:
         start = time.time()
 
         # Get all kv cache needed by the model
+        # ===================================================================================
+        # 1、计算对于当前模型，各个worker的各个layer上，attn模块相关的kv cache元数据。
+        # kv_cache_specs：List[Dict[str, KVCacheSpec]]，每一个dict对应一个worker的返回结果：
+        #                - str：模型某一层的layer_name
+        #                - KVCacheSpec：维护在该worker上的、这一层layer的kv cache相关元信息
+        #                              包括 num_heads, head_size，dtype, use_mla等信息
+        #               （注意，这里仅记录元信息，没有实际执行kv cache的分配！）
+        # - 执行流程：【Executor.get_kv_cache_specs】
+        #           -> 【 MultiProcExecutor.collective_rpc 】：
+        #              Executor触发所有worker执行get_kv_cache_specs，并收集相关结果
+        #           -> 【 GPUModelRunner.get_kv_cache_specs 】：
+        #              Worker上的 ModelRunner 负责实际执行命令
+        #           -> 【 MultiProcExecutor.collective_rpc 】：
+        #              Executor收集各个workers上的结果
+        # ===================================================================================
         kv_cache_specs = self.model_executor.get_kv_cache_specs()
 
         has_kv_cache = any(kv_cache_spec for kv_cache_spec in kv_cache_specs)
@@ -247,6 +267,11 @@ class EngineCore:
             else:
                 # Profiles the peak memory usage of the model to determine how
                 # much memory can be allocated for kv cache.
+                # ===================================================================================
+                # 2、profiling：模拟执行1次前向计算，统计各个worker（卡）上有多少空间可以留给kv cache
+                # available_gpu_memory：List[float]，每个元素代表一个worker（卡）的返回结果
+                # 每块卡上可分配给kv cache的显存 = 该卡总显存 * 用户设置的显存利用率 - fwd推理过程中的峰值显存
+                # ===================================================================================
                 available_gpu_memory = self.model_executor.determine_available_memory()
                 self.available_gpu_memory_for_kv_cache = available_gpu_memory[0]
         else:
@@ -258,6 +283,14 @@ class EngineCore:
         # Track max_model_len before KV cache config to detect auto-fit changes
         max_model_len_before = vllm_config.model_config.max_model_len
 
+        # ===================================================================================
+        # 3、计算每块卡上的kv cache配置
+        # kv_cache_configs：List[KVCacheConfig]，包含每块gpu上的：
+        # - num_blocks：可分配的block数量，floor(可用显存 / 单块缓存大小)
+        # - block_size：每块缓存的 token 容量
+        # - cache_dtype：数据类型
+        # - 等等
+        # ===================================================================================
         kv_cache_configs = get_kv_cache_configs(
             vllm_config, kv_cache_specs, available_gpu_memory
         )
@@ -274,6 +307,7 @@ class EngineCore:
         num_cpu_blocks = 0
 
         # Initialize kv cache and warmup the execution
+        # 5、在各张卡上实际分配 KV cache（用0张量填充kv cache）
         self.model_executor.initialize_from_config(kv_cache_configs)
 
         elapsed = time.time() - start
@@ -756,6 +790,21 @@ class EngineCore:
             self.structured_output_manager.grammar_init(req)
         return req, request.current_wave
 
+
+# EngineCoreProc是EngineCore的一个包装类，用于在后台进程中运行EngineCore，并通过ZMQ进行通信。
+# 它在初始化时会进行握手，设置数据并行环境，并启动输入和输出线程来处理ZMQ套接字的通信。
+# 作用是：  
+# 1. 初始化调度器，做调度 
+# 2. 初始化multiprocexe进程，用来管理workers 
+# 3. worker进程负责执行模型推理，并将结果返回给调度器
+
+# EngineCoreProc
+# ├── Scheduler
+# └── MultiprocExecutor
+#   ├── WorkerProc rank0 / local_rank0
+#   ├── WorkerProc rank1 / local_rank1
+#   ├── WorkerProc rank2 / local_rank2
+#   └── ...
 
 class EngineCoreProc(EngineCore):
     """ZMQ-wrapper for running EngineCore in background process."""

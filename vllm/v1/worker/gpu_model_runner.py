@@ -6237,6 +6237,8 @@ class GPUModelRunner(
             return {}
         kv_cache_spec: dict[str, KVCacheSpec] = {}
         layer_type = cast(type[Any], AttentionLayerBase)
+
+        # 从 vllm config中找到所有 layer_type 类型的层
         attn_layers = get_layers_from_vllm_config(self.vllm_config, layer_type)
         for layer_name, attn_module in attn_layers.items():
             if isinstance(attn_module, Attention) and (
@@ -6249,6 +6251,7 @@ class GPUModelRunner(
                 # enables the memory saving of cross-layer kv sharing, allowing
                 # a given amount of memory to accommodate longer context lengths
                 # or enable more requests to be processed simultaneously.
+                # 处理共享kv cache的情况
                 self.shared_kv_cache_layers[layer_name] = kv_tgt_layer
                 continue
             # Skip modules that don't need KV cache (eg encoder-only attention)

@@ -147,6 +147,7 @@ class CoreEngineProcManager:
                     )
                     else contextlib.nullcontext()
                 ):
+                    # coreengine准备好每张卡上的进程，这里启动这些进程（worker）
                     proc.start()
         finally:
             # Kill other procs if not all are running.

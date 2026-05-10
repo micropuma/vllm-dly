@@ -794,7 +794,7 @@ class FlashAttentionImpl(AttentionImpl):
             value,
             key_cache,
             value_cache,
-            slot_mapping,
+            slot_mapping,   # 每个新token写到哪个物理slot
             self.kv_cache_dtype,
             layer._k_scale,
             layer._v_scale,

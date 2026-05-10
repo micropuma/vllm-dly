@@ -1042,6 +1042,7 @@ def unified_attention(
             USE_FP8=output_scale is not None,
         )
     else:
+        # 3D kernel优势是在decode阶段提高occupancy，缺点是引入同步reduction kernel开销
         kernel_unified_attention_3d[
             (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
         ](

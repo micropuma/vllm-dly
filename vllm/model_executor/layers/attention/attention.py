@@ -412,12 +412,12 @@ class Attention(nn.Module, AttentionLayerBase):
             if self.impl.supports_quant_query_input:
                 query, _ = self.query_quant(query, self._q_scale)
 
-        if self.use_output:                # 拆解多头注意力
+        if self.use_output:               
             if output_shape is None:
                 # Handle both 2D [num_tokens, hidden] and
                 # 3D [num_tokens, heads, head_dim] query
                 num_tokens = query.shape[0]
-                output_shape = torch.Size(
+                output_shape = torch.Size(        # 降成二维
                     (num_tokens, self.num_heads * self.head_size_v)
                 )
             output = torch.empty(output_shape, dtype=output_dtype, device=query.device)
@@ -432,7 +432,7 @@ class Attention(nn.Module, AttentionLayerBase):
             if value is not None:
                 value = value.view(-1, self.num_kv_heads, self.head_size_v)
             kv_cache_dummy_dep = None
-            if self.use_direct_call:
+            if self.use_direct_call:            # TPU等硬件，XLA编译器接管编译流程，use_direct_call为True，将attention layer作为白盒
                 # Skip this if sharing KV cache with an earlier attention layer.
                 if (
                     not self.attn_backend.forward_includes_kv_cache_update
@@ -451,7 +451,7 @@ class Attention(nn.Module, AttentionLayerBase):
                     self.layer_name,
                     kv_cache_dummy_dep=kv_cache_dummy_dep,
                 )
-            else:
+            else:             # GPU等硬件，实现了torch.ops.vllm.*等算子，use_direct_call为False，将attention layer作为黑盒，支持piecewise cuda graph
                 # Skip this if sharing KV cache with an earlier attention layer.
                 if (
                     not self.attn_backend.forward_includes_kv_cache_update

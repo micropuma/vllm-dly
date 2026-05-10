@@ -87,12 +87,12 @@ class EngineCoreClient(ABC):
                 "is not currently supported."
             )
 
-        if multiprocess_mode and asyncio_mode:
+        if multiprocess_mode and asyncio_mode:        # online模式
             return EngineCoreClient.make_async_mp_client(
                 vllm_config, executor_class, log_stats
             )
 
-        if multiprocess_mode and not asyncio_mode:
+        if multiprocess_mode and not asyncio_mode:    # offline模式是同步 + 多进程
             return SyncMPClient(vllm_config, executor_class, log_stats)
 
         return InprocClient(vllm_config, executor_class, log_stats)

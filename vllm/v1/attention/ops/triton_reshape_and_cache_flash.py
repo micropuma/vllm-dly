@@ -34,13 +34,13 @@ def reshape_and_cache_kernel_flash(
     # tune parameters
     TILE_SIZE: tl.constexpr,
 ):
-    token_idx = tl.program_id(axis=0)
-    slot_idx = tl.load(slot_mapping_ptr + token_idx).to(tl.int64)
+    token_idx = tl.program_id(axis=0)              # 第一维是token
+    slot_idx = tl.load(slot_mapping_ptr + token_idx).to(tl.int64)    # 根据token计算slot的位置
     if slot_idx < 0:
         # Padding token that should be ignored.
         return
 
-    block_idx = slot_idx // block_size
+    block_idx = slot_idx // block_size   # 根据slot的位置辅助定位store的block位置
     block_offset = slot_idx % block_size
 
     tile_i = tl.program_id(axis=1)
@@ -69,12 +69,15 @@ def reshape_and_cache_kernel_flash(
             + (cur_dim % x)
         )
     else:
+        # cache布局是[num_blocks, block_size, num_heads, head_size]
+        # 所以block_stride是block_sizexnum_headsxhead_size  
+        # page_stride是num_heads*head_size
         tgt_base = block_idx * block_stride + block_offset * page_stride
         tgt_idx_k = tgt_base + tile_pos
         tgt_idx_v = tgt_base + tile_pos
 
     # [TILE_SIZE]
-    key_load = tl.load(
+    key_load = tl.load(                   # 从临时buffer中加载key
         key_ptr + src_key_idx + tile_pos, mask=tile_pos < (num_heads * head_size)
     )
     if FP8_KV_CACHE:
@@ -98,7 +101,7 @@ def reshape_and_cache_kernel_flash(
     else:
         value_tile = value_load
 
-    tl.store(
+    tl.store(         # 存储到永久的kv cache中
         key_cache_ptr + tgt_idx_k,
         key_tile,
         mask=tile_pos < (num_heads * head_size),
@@ -194,7 +197,7 @@ def triton_reshape_and_cache_flash(
         triton.cdiv(n, meta["TILE_SIZE"]),
     )
 
-    reshape_and_cache_kernel_flash[grid](
+    reshape_and_cache_kernel_flash[grid](   
         key_ptr=key,
         value_ptr=value,
         key_cache_ptr=key_cache,

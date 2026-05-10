@@ -1257,6 +1257,7 @@ def get_kv_cache_groups(
     return _get_kv_cache_groups_uniform_page_size(kv_cache_spec)
 
 
+# 把多个 worker 的 KVCacheConfig 合并成一个“给 scheduler 用的简化版配置”。
 def generate_scheduler_kv_cache_config(
     kv_cache_configs: list[KVCacheConfig],
 ) -> KVCacheConfig:

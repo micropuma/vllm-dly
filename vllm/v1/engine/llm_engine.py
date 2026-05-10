@@ -96,6 +96,10 @@ class LLMEngine:
         )
 
         # Convert TokPrompt --> EngineCoreRequest.
+        # 作用是对req进行预处理，具体包括：  
+        # Tokenizer
+        # 验证输入参数合法性  
+        # 将request封装成 enginecore request格式
         self.input_processor = InputProcessor(self.vllm_config, renderer)
 
         # Converts EngineCoreOutputs --> RequestOutput.

@@ -124,6 +124,7 @@ class SpinSleepTimer(SpinTimer):
             sched_yield()
 
 
+# 小数据进程间通信，通过共享内存的环形缓冲队列来做
 class ShmRingBuffer:
     def __init__(
         self,
@@ -181,7 +182,7 @@ class ShmRingBuffer:
         get the name of the shared memory and open it, so that they can access the
         same shared memory buffer.
         """  # noqa
-        self.n_reader = n_reader
+        self.n_reader = n_reader    # 10MB
         self.metadata_size = 1 + n_reader
         self.max_chunk_bytes = max_chunk_bytes
         self.max_chunks = max_chunks
@@ -620,10 +621,34 @@ class MessageQueue:
         """Read from message queue with optional timeout (in seconds)"""
         if self._is_local_reader:
             with self.acquire_read(timeout, cancel, indefinite) as buf:
+                # written_flag = 0：
+                #   当前 shm slot 尚未发布/正在写入，reader/worker 不能读取。
+                #
+                # buf[0] = 1：
+                #   当前消息发生 overflow，说明真实 payload 太大，未存放在当前 shm slot 中；
+                #   writer/Executor 会通过 ZMQ socket 发送真实 payload。
+                #
+                # 注意：
+                #   buf[0] 是 data buffer 内部的 overflow flag，
+                #   与 metadata 中的 written_flag / reader_flags 不是同一类标志。
+                #
+                # buf 表示当前 shm slot 的整块 data buffer：
+                #   - buf[0] == 0：payload 存在当前 shm slot 中，worker 直接从 shm 解析；
+                #   - buf[0] == 1：当前 shm slot 只保存 overflow marker，worker 需要从 ZMQ socket recv 真实 payload。
                 overflow = buf[0] == 1
                 if not overflow:
                     offset = 3
+                    # buf[0]是flag，跳过
+                    # buf[1:3]是oob buffer count
                     buf_count = from_bytes_big(buf[1:offset])
+                    
+                    # 拿到每个buffer的长度和内容，数据layout如下：  
+                    # +---------+--------------+--------------+-------------+--------------+-------------+-----+
+                    # | byte 0  | byte 1 ~ 2   | 4 bytes      | buffer0     | 4 bytes      | buffer1     | ... |
+                    # +---------+--------------+--------------+-------------+--------------+-------------+-----+
+                    # | flag    | buffer_count | len(buffer0) | buffer0 data| len(buffer1) | buffer1 data| ... |
+                    # +---------+--------------+--------------+-------------+--------------+-------------+-----+
+                    
                     all_buffers = []
                     for i in range(buf_count):
                         buf_offset = offset + 4
